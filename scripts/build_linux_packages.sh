@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
+IN_DOCKER_FPM_BUILD="${IN_DOCKER_FPM_BUILD:-0}"
+
 if ! command -v fpm >/dev/null 2>&1; then
   echo "fpm is required to build DEB/RPM packages" >&2
   exit 1
@@ -31,15 +33,45 @@ print(data['project']['version'])
 PY
 )}"
 
+if [[ "$(uname -s)" == "Darwin" && "${IN_DOCKER_FPM_BUILD}" != "1" ]]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "docker is required to build valid Linux DEB/RPM packages from macOS hosts" >&2
+    exit 1
+  fi
+
+  echo "Detected macOS host; building Linux packages in ubuntu:24.04 container ..."
+  docker run --rm \
+    -e DEBIAN_FRONTEND=noninteractive \
+    -e IN_DOCKER_FPM_BUILD=1 \
+    -e VERSION="${VERSION}" \
+    -e OUTPUT_DIR="/work/dist/packages" \
+    -e BUILD_DIR="/work/build/packages" \
+    -v "${ROOT_DIR}:/work" \
+    -w /work \
+    ubuntu:24.04 bash -lc '
+      set -euo pipefail
+      apt-get update >/dev/null
+      apt-get install -y ca-certificates python3 python3-pip ruby ruby-dev build-essential rpm >/dev/null
+      gem install --no-document fpm >/dev/null
+      bash scripts/build_linux_packages.sh "${VERSION}"
+    '
+  exit 0
+fi
+
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/dist/packages}"
 BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/build/packages}"
 STAGE_DIR="${BUILD_DIR}/stage"
 
+PIP_INSTALL_ARGS=()
+if python3 -m pip --help | grep -q -- '--break-system-packages'; then
+  PIP_INSTALL_ARGS+=(--break-system-packages)
+fi
+export PIP_BREAK_SYSTEM_PACKAGES=1
+
 rm -rf "${BUILD_DIR}"
 mkdir -p "${STAGE_DIR}" "${OUTPUT_DIR}"
 
-python3 -m pip install --upgrade pip >/dev/null
-python3 -m pip install . --root "${STAGE_DIR}" --prefix /usr >/dev/null
+python3 -m pip install "${PIP_INSTALL_ARGS[@]}" . --root "${STAGE_DIR}" --prefix /usr >/dev/null
 
 install_file() {
   local src="$1"

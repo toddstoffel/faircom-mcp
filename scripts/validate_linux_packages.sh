@@ -36,7 +36,7 @@ docker run --rm -v "${ROOT_DIR}/dist/packages:/packages:ro" ubuntu:24.04 bash -l
   systemd-analyze verify /lib/systemd/system/faircom-mcp.service
   logrotate -d /etc/logrotate.d/faircom-mcp >/dev/null
   dpkg -r faircom-mcp
-  ! dpkg -s faircom-mcp >/dev/null 2>&1
+  ! dpkg -s faircom-mcp 2>/dev/null | grep -q "^Status: install ok installed"
 '
 
 echo "Validating RPM install/uninstall lifecycle in rockylinux:9 ..."

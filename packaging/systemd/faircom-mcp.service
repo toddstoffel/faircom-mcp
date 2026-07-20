@@ -10,7 +10,7 @@ Group=faircom-mcp
 EnvironmentFile=-/etc/faircom-mcp/faircom-mcp.env
 Environment=FAIRCOM_HTTP_HOST=0.0.0.0
 Environment=FAIRCOM_HTTP_PORT=8000
-ExecStart=/usr/bin/faircom-mcp-server --transport http
+ExecStart=/usr/local/bin/faircom-mcp-server --transport http
 Restart=on-failure
 RestartSec=2
 RuntimeDirectory=faircom-mcp

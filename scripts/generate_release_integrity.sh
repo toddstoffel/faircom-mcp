@@ -4,8 +4,33 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-if ! command -v cyclonedx-py >/dev/null 2>&1; then
-  echo "cyclonedx-py is required to generate SBOM artifacts" >&2
+CYCLONEDX_PY_BIN="$(command -v cyclonedx-py || true)"
+if [[ -z "${CYCLONEDX_PY_BIN}" ]]; then
+  USER_CYCLONEDX_PY="$(python3 - <<'PY'
+import site
+from pathlib import Path
+
+print((Path(site.getuserbase()) / 'bin' / 'cyclonedx-py').as_posix())
+PY
+)"
+  if [[ -x "${USER_CYCLONEDX_PY}" ]]; then
+    CYCLONEDX_PY_BIN="${USER_CYCLONEDX_PY}"
+  fi
+fi
+
+if [[ -z "${CYCLONEDX_PY_BIN}" ]]; then
+  TOOLS_VENV_DIR="${ROOT_DIR}/.tools/cyclonedx-venv"
+  if [[ ! -x "${TOOLS_VENV_DIR}/bin/cyclonedx-py" ]]; then
+    echo "Preparing local tools environment for cyclonedx-py ..."
+    python3 -m venv "${TOOLS_VENV_DIR}"
+    "${TOOLS_VENV_DIR}/bin/python" -m pip install --upgrade pip >/dev/null
+    "${TOOLS_VENV_DIR}/bin/python" -m pip install cyclonedx-bom >/dev/null
+  fi
+  CYCLONEDX_PY_BIN="${TOOLS_VENV_DIR}/bin/cyclonedx-py"
+fi
+
+if [[ ! -x "${CYCLONEDX_PY_BIN}" ]]; then
+  echo "cyclonedx-py could not be resolved or installed" >&2
   exit 1
 fi
 
@@ -13,7 +38,7 @@ DIST_DIR="${ROOT_DIR}/dist"
 mkdir -p "${DIST_DIR}"
 
 echo "Generating CycloneDX SBOM ..."
-cyclonedx-py environment --output-format json --output-file "${DIST_DIR}/sbom.cdx.json"
+"${CYCLONEDX_PY_BIN}" environment --output-format json --output-file "${DIST_DIR}/sbom.cdx.json"
 
 echo "Generating SHA256 checksums ..."
 python3 - <<'PY'

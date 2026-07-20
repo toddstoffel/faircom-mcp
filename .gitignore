@@ -11,6 +11,9 @@ private_notes/
 node_modules/
 dist/
 coverage/
+build/
+.tools/
+*.egg-info/
 *.tsbuildinfo
 .coverage
 .pytest_cache/
