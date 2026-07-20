@@ -2,70 +2,130 @@
 
 Production-grade MCP server for FairCom JSON API with enterprise Linux operational standards.
 
-## Development Setup
-1. Install package + dev dependencies into local system/user Python:
+## Who This Is For
+This README is for operators installing the server as a Linux package (`.deb` or `.rpm`) and connecting it to an existing FairCom deployment.
+
+Build and release workflows for maintainers are documented in `BUILD.md`.
+
+## Install The Package
+Install from your distributed artifact in `dist/packages/`.
+
+Debian/Ubuntu:
 
 ```bash
-python3 -m pip install --user -e '.[dev]'
+sudo apt-get install -y ./faircom-mcp_<version>_all.deb
 ```
 
-2. Ensure user-level scripts are on `PATH` (needed for `faircom-mcp-server` and `cyclonedx-py`):
+RHEL/Rocky/Alma/Fedora:
 
 ```bash
-export PATH="$(python3 -m site --user-base)/bin:$PATH"
+sudo dnf install -y ./faircom-mcp-<version>-1.noarch.rpm
 ```
 
-## Quality Commands
+The package installs:
+- systemd service: `/usr/lib/systemd/system/faircom-mcp.service`
+- environment file: `/etc/faircom-mcp/faircom-mcp.env`
+- logrotate policy: `/etc/logrotate.d/faircom-mcp`
+
+## Configure For Your FairCom Deployment
+Edit `/etc/faircom-mcp/faircom-mcp.env` and set your FairCom API endpoint and authentication.
+
+Required settings:
+- `FAIRCOM_API_BASE_URL`: Base URL for your FairCom JSON API, for example `https://faircom.example.com:9443`
+- authentication: either
+    - `FAIRCOM_API_TOKEN`, or
+    - both `FAIRCOM_API_USERNAME` and `FAIRCOM_API_PASSWORD`
+
+Recommended baseline:
+
 ```bash
-make format
-make lint
-make typecheck
-make test
-make test-edge
+FAIRCOM_API_BASE_URL=https://faircom.example.com:9443
+FAIRCOM_API_TOKEN=replace-with-api-token
+FAIRCOM_HTTP_HOST=0.0.0.0
+FAIRCOM_HTTP_PORT=8000
+FAIRCOM_TLS_VERIFY=true
 ```
 
-## Container Runtime
-Build and run with Docker:
+If your FairCom endpoint uses an internal/self-signed certificate, temporarily disable TLS verification:
 
 ```bash
-make container-build
-make container-run
+FAIRCOM_TLS_VERIFY=false
 ```
 
-Or with compose:
+Optional SQL write guardrails:
 
 ```bash
-make compose-up
-make compose-down
+FAIRCOM_SQL_ALLOWLIST=
+FAIRCOM_SQL_DENYLIST=
 ```
 
-## Transport Validation
-HTTP mode:
+Optional tool-group allowlist:
 
 ```bash
-faircom-mcp-server --transport http
+FAIRCOM_TOOL_GROUP_ALLOWLIST=metadata,query,write,admin,diagnostics
+```
+
+Optional diagnostics and observability:
+
+```bash
+FAIRCOM_ENABLE_DIAGNOSTICS_UI=true
+FAIRCOM_DIAGNOSTICS_TOKEN=replace-with-strong-token
+FAIRCOM_ENABLE_METRICS=true
+FAIRCOM_ENABLE_TRACING=false
+```
+
+## Start The Service
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now faircom-mcp.service
+sudo systemctl status faircom-mcp.service --no-pager
+```
+
+After editing config, restart:
+
+```bash
+sudo systemctl restart faircom-mcp.service
+```
+
+## Validate Installation
+Health checks:
+
+```bash
 curl -fsS http://127.0.0.1:8000/healthz
+curl -fsS http://127.0.0.1:8000/readyz
 ```
 
-STDIO mode:
+Metrics endpoint (enabled by default):
 
 ```bash
-faircom-mcp-server --transport stdio
+curl -fsS http://127.0.0.1:8000/metrics
 ```
 
-## Paginated SQL Queries
-Use paginated SQL query mode for large result sets:
+Diagnostics endpoints (only when enabled and token configured):
 
 ```text
-tool: sql_query_page
-inputs:
-    statement: "SELECT * FROM my_table ORDER BY id"
-    params: []
-    page: 1
-    page_size: 500
+GET /diagnostics
+GET /diagnostics/json
 ```
 
-Response includes deterministic iteration metadata:
+Pass diagnostics token using header `x-diagnostics-token` or query parameter `token`.
+
+## Available MCP Tools
+Core SQL and metadata tools:
+
+```text
+list_tables(table_name?)
+describe_table(table_name)
+list_table_columns(table_name)
+list_table_indexes(table_name)
+sql_query(statement, params?)
+sql_query_page(statement, params?, page, page_size)
+sql_execute(statement, params?)
+runtime_status()
+```
+
+Paginated query responses include deterministic iteration metadata:
 
 ```text
 has_more: <bool>
@@ -73,23 +133,7 @@ next_page: <int|null>
 next_cursor: <int|null>
 ```
 
-## Metadata And Admin Tools
-The server also exposes metadata and runtime inspection tools:
-
-```text
-list_table_columns(table_name)
-list_table_indexes(table_name)
-runtime_status()
-```
-
-## Tool-Group Policy Controls
-Restrict tool groups with an allowlist:
-
-```bash
-export FAIRCOM_TOOL_GROUP_ALLOWLIST="metadata,query,write,admin,diagnostics"
-```
-
-Supported groups:
+Supported tool groups:
 - `metadata`: table and schema metadata tools
 - `query`: read-only SQL query tools
 - `write`: mutating SQL execute tools
@@ -98,100 +142,11 @@ Supported groups:
 
 If a blocked group is invoked, the server returns a validation error with policy details.
 
-## Metrics And Diagnostics
-Prometheus-style metrics are enabled by default at:
-
-```text
-GET /metrics
-```
-
-Optional diagnostics endpoints:
-
-```bash
-export FAIRCOM_ENABLE_DIAGNOSTICS_UI=true
-export FAIRCOM_DIAGNOSTICS_TOKEN="replace-with-strong-token"
-```
-
-When enabled, diagnostics endpoints require either header `x-diagnostics-token`
-or query parameter `token`:
-
-```text
-GET /diagnostics
-GET /diagnostics/json
-```
-
-Optional tracing integration can be enabled with:
-
-```bash
-export FAIRCOM_ENABLE_TRACING=true
-```
-
-## Packaging Artifacts
-Linux service and package metadata live under `packaging/`:
-- `packaging/systemd/`: systemd unit and environment template
-- `packaging/logrotate/`: log rotation policy
-- `packaging/sysusers.d/`: service account provisioning
-- `packaging/tmpfiles.d/`: runtime/state directory provisioning
-- `packaging/rpm/`: RPM spec and notes
-- `packaging/deb/`: DEB control and maintainer scripts
-
-Validate packaging tree consistency:
-
-```bash
-make package-verify
-```
-
-Build installable Linux packages (requires `fpm`):
-
-```bash
-make package-build
-```
-
-Validate package install/uninstall lifecycle in distro containers:
-
-```bash
-make package-validate
-```
-
-Generate release integrity artifacts (CycloneDX SBOM + SHA256 checksums):
-
-```bash
-make release-integrity
-```
-
-Install `fpm` locally:
-
-macOS (Homebrew):
-
-```bash
-brew install rpm ruby
-gem install --no-document fpm
-```
-
-Debian/Ubuntu:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y rpm ruby ruby-dev build-essential
-sudo gem install --no-document fpm
-```
-
 ## Operations Docs
 - `docs/operations-runbook.md`: service lifecycle, startup probe, logs, and troubleshooting
 - `docs/release-notes-template.md`: release notes skeleton for tagged releases
 - `docs/support-matrix.md`: validated Linux distribution and package support targets
 - `docs/testing.md`: test layers and FairCom Edge runtime validation
-
-## Release Integrity Artifacts
-- `dist/sbom.cdx.json`: CycloneDX SBOM for the release environment
-- `dist/SHA256SUMS`: checksums for release artifacts in `dist/`
-
-## Project Structure
-- `src/faircom_mcp/transports`: MCP transport adapters (HTTP/SSE/STDIO)
-- `src/faircom_mcp/api`: FairCom JSON API client and adapters
-- `src/faircom_mcp/tools`: MCP tool handlers and schemas
-- `src/faircom_mcp/security`: auth, policy, and write guardrails
-- `packaging/`: Linux packaging and service artifacts (RPM/DEB/systemd/logrotate)
 
 ## Notes
 - `private_notes/` is local-only planning context and ignored by git.
