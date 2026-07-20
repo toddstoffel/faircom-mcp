@@ -21,7 +21,9 @@ class TableAdapter:
         if not isinstance(result, dict):
             return result
 
-        data = result.get("result", {}).get("data") if isinstance(result.get("result"), dict) else None
+        data = (
+            result.get("result", {}).get("data") if isinstance(result.get("result"), dict) else None
+        )
         if isinstance(data, list) and data:
             return data[0]
         return result

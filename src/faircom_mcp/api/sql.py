@@ -23,8 +23,7 @@ class SQLAdapter:
         if params is not None:
             # FairCom JSON API uses named sqlParams rather than positional params.
             payload["sqlParams"] = [
-                {"name": f"p{index + 1}", "value": value}
-                for index, value in enumerate(params)
+                {"name": f"p{index + 1}", "value": value} for index, value in enumerate(params)
             ]
         return self._client.post_action("getRecordsUsingSQL", payload)
 
@@ -49,8 +48,7 @@ class SQLAdapter:
         }
         if params is not None:
             payload["sqlParams"] = [
-                {"name": f"p{index + 1}", "value": value}
-                for index, value in enumerate(params)
+                {"name": f"p{index + 1}", "value": value} for index, value in enumerate(params)
             ]
         result = self._client.post_action("getRecordsUsingSQL", payload)
         return self._with_pagination_metadata(result, page=page, page_size=page_size)
@@ -60,8 +58,7 @@ class SQLAdapter:
         payload: dict[str, Any] = {"sqlStatements": [statement]}
         if params is not None:
             payload["inParams"] = [
-                {"name": f"p{index + 1}", "value": value}
-                for index, value in enumerate(params)
+                {"name": f"p{index + 1}", "value": value} for index, value in enumerate(params)
             ]
         return self._client.post_action("runSQLStatements", payload)
 
@@ -75,7 +72,9 @@ class SQLAdapter:
 
         maybe_result = result.get("result")
         rows = maybe_result.get("data") if isinstance(maybe_result, dict) else None
-        has_more = bool(maybe_result.get("moreRecords")) if isinstance(maybe_result, dict) else False
+        has_more = (
+            bool(maybe_result.get("moreRecords")) if isinstance(maybe_result, dict) else False
+        )
         if not has_more and isinstance(rows, list) and len(rows) == page_size:
             has_more = True
 
