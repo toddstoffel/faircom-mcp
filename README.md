@@ -339,7 +339,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for terms
 
 ## Support
 
-For FairCom-specific questions: https://www.faircom.com/support  
+For FairCom-specific questions: https://www.faircom.com/support
 For MCP integration issues: Open a GitHub issue
 
 ---
