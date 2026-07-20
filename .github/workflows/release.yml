@@ -20,9 +20,20 @@ jobs:
         run: |
           VERSION=${{ github.ref_name }}
           VERSION=${VERSION#v}  # Strip leading 'v'
-          sed -i "s/version = \"[^\"]*\"/version = \"${VERSION}\"/" pyproject.toml
-          echo "Updated pyproject.toml to version ${VERSION}"
-          grep 'version =' pyproject.toml | head -n1
+          python3 << 'EOF'
+          import re
+          import os
+          version = os.environ['VERSION']
+          with open('pyproject.toml', 'r') as f:
+              content = f.read()
+          # Replace only the version field in [project] section
+          pattern = r'(\[project\].*?name = "faircom-mcp"\n)version = "[^"]*"'
+          content = re.sub(pattern, rf'\1version = "{version}"', content, flags=re.DOTALL)
+          with open('pyproject.toml', 'w') as f:
+              f.write(content)
+          print(f"Updated pyproject.toml to version {version}")
+          EOF
+          grep '^version =' pyproject.toml
 
       - name: Set up Python
         uses: actions/setup-python@v5
