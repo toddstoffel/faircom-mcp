@@ -16,6 +16,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set version from tag
+        run: |
+          VERSION=${{ github.ref_name }}
+          VERSION=${VERSION#v}  # Strip leading 'v'
+          sed -i "s/version = \"[^\"]*\"/version = \"${VERSION}\"/" pyproject.toml
+          echo "Updated pyproject.toml to version ${VERSION}"
+          grep 'version =' pyproject.toml | head -n1
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
