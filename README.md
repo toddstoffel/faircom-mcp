@@ -1,67 +1,131 @@
 # FairCom MCP Server
 
-Production-grade MCP server for FairCom JSON API.
+Connect AI assistants and LLMs to FairCom databases with production-grade safety controls, Linux packaging, and operational discipline.
 
-FairCom MCP lets MCP-compatible clients query and operate FairCom data with explicit safety controls, Linux package deployment, and service-grade operations support.
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Your AI Assistant (Claude, Copilot, etc.)                  │
+└────────────────────┬────────────────────────────────────────┘
+                     │ MCP Protocol
+                     │ (HTTP + JSON-RPC)
+┌────────────────────▼────────────────────────────────────────┐
+│  FairCom MCP Server                                         │
+│  • Session management                                       │
+│  • Write safety enforcement (confirm_write=true)           │
+│  • Tool exposure control                                    │
+│  • Rate limiting, observability                            │
+└────────────────────┬────────────────────────────────────────┘
+                     │ FairCom JSON API
+                     │ (HTTP REST)
+┌────────────────────▼────────────────────────────────────────┐
+│  FairCom Database                                           │
+│  (Edge, DB, RTG, ISAM, MQ)                                 │
+└─────────────────────────────────────────────────────────────┘
+```
 
-## Start Here
+**Why FairCom MCP?**
 
-If you are an operator deploying to Linux hosts:
-- Continue in this README.
+- ✅ **Open source** – Apache 2.0, transparent, community-driven
+- ✅ **Production ready** – systemd service, log rotation, health checks
+- ✅ **Safe by default** – Explicit write confirmation, tool allowlisting
+- ✅ **Portfolio-wide** – Works with Edge, DB, RTG, ISAM, MQ
+- ✅ **AI-native** – Purpose-built for Claude, Copilot, local LLMs
 
-If you are a maintainer building, packaging, or releasing:
-- Use `BUILD.md`.
+## Use Cases
 
-## Why FairCom MCP
+### 1. Business Intelligence & Reporting
+**Empower business users to ask natural language questions about FairCom data.**
 
-This project is designed for teams that need MCP access to FairCom with production operational discipline.
+*Example: "What were our top 5 products by revenue last quarter?"*
 
-Key outcomes:
-- Connect MCP clients to FairCom metadata and SQL tools over HTTP (`/mcp`).
-- Enforce write intent explicitly (`confirm_write=true` for `sql_execute`).
-- Control exposed tool groups (metadata/query/write/admin/diagnostics).
-- Run as a Linux service with package-managed installation and log rotation.
-- Expose health/readiness/metrics for runtime observability.
+The AI assistant translates this to SQL, queries FairCom, and summarizes results with visualizations.
 
-## Capability Summary
+```python
+# FairCom MCP exposes:
+# sql_query(statement, params?) → fetch data
+# list_tables(name_like?) → discover schema
+# list_table_columns(table_name) → understand structure
+```
 
-| Area | FairCom MCP |
-|---|---|
-| Primary purpose | MCP server for FairCom JSON API |
-| MCP transport | Streamable HTTP on `POST /mcp` |
-| Operational model | Linux package install (`.deb`/`.rpm`) + systemd |
-| SQL read tools | `sql_query`, `sql_query_page` |
-| SQL write safety | `sql_execute` requires `confirm_write=true` |
-| Metadata tools | Tables, columns, indexes |
-| Runtime observability | `/health`, `/ready`, `/metrics`, diagnostics endpoints |
-| Deployment hardening | systemd unit + environment file + logrotate policy |
+### 2. Data Integration & ETL
+**Automate data pipelines that read/write to FairCom.**
 
-## Quickstart (5 Minutes)
+*Example: Sync customer data from SaaS → FairCom using AI-guided transformations.*
 
-Run with Docker against an existing FairCom Edge server:
+```python
+# The AI assistant can:
+# 1. List available tables (list_tables)
+# 2. Inspect target schema (describe_table)
+# 3. Execute transformations (sql_execute with confirm_write=true)
+# 4. Validate results (sql_query to spot-check)
+```
+
+### 3. Operational Analytics
+**Real-time status monitoring and anomaly detection.**
+
+*Example: "Show me any orders with payment processing delays."*
+
+```python
+# FairCom MCP provides:
+# - /metrics → Prometheus-compatible metrics
+# - /diagnostics → System health
+# - sql_query → Run diagnostic queries
+# Combine for full observability loop
+```
+
+### 4. Domain-Specific AI Chatbots
+**Build internal tools (CRM, inventory, compliance).**
+
+*Example: Chatbot for warehouse staff to check inventory levels, process returns.*
+
+```python
+# Sandbox the chatbot with:
+# FAIRCOM_TOOL_GROUP_ALLOWLIST=metadata,query
+# (write tools disabled for read-only workflows)
+#
+# FAIRCOM_SQL_DENYLIST=DELETE,DROP
+# (prevent destructive operations)
+```
+
+## Quick Start (5 Minutes)
+
+### Option 1: Docker (Fastest)
 
 ```bash
+# Start FairCom MCP pointing to your FairCom instance
 docker run -d --name faircom-mcp \
   -p 8000:8000 \
-  -e FAIRCOM_API_BASE_URL=http://<faircom-host>:8080 \
+  -e FAIRCOM_API_BASE_URL=http://faircom-host:8080 \
   -e FAIRCOM_API_USERNAME=ADMIN \
   -e FAIRCOM_API_PASSWORD=ADMIN \
-  faircom-mcp:deb --transport http
+  toddstoffel/faircom-mcp:latest --transport http
 ```
 
-Validate server health:
+### Option 2: Linux Package (Production)
+
+**Debian/Ubuntu:**
+```bash
+sudo apt-get install -y ./faircom-mcp_0.1.3_all.deb
+sudo systemctl enable --now faircom-mcp
+```
+
+**RHEL/Rocky/AlmaLinux:**
+```bash
+sudo dnf install -y ./faircom-mcp-0.1.3-1.noarch.rpm
+sudo systemctl enable --now faircom-mcp
+```
+
+### Verify it's running:
 
 ```bash
+# Health check
 curl -fsS http://127.0.0.1:8000/health
-curl -fsS http://127.0.0.1:8000/ready
-```
+# Output: {"status":"healthy"}
 
-Initialize MCP session:
-
-```bash
-curl -i -sS -X POST http://127.0.0.1:8000/mcp \
-  -H 'Accept: application/json, text/event-stream' \
+# List available tables
+curl -i -X POST http://127.0.0.1:8000/mcp \
   -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
   --data '{
     "jsonrpc": "2.0",
     "id": 1,
@@ -69,216 +133,215 @@ curl -i -sS -X POST http://127.0.0.1:8000/mcp \
     "params": {
       "protocolVersion": "2025-03-26",
       "capabilities": {},
-      "clientInfo": {"name": "quickstart-client", "version": "1.0"}
+      "clientInfo": {"name": "test", "version": "1.0"}
     }
-  }'
+  }' | head -20
 ```
 
-Use returned `mcp-session-id` as `Mcp-Session-Id` for subsequent MCP requests.
+## Tutorial: Query Your First Table
 
-## Install From Linux Package
+Let's query FairCom using Claude or a local LLM via FairCom MCP.
 
-Install from your distributed artifact in `dist/packages/`.
-
-Debian/Ubuntu:
+**Step 1: Initialize MCP Session**
 
 ```bash
-sudo apt-get install -y ./faircom-mcp_<version>_all.deb
+curl -i -X POST http://127.0.0.1:8000/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2025-03-26",
+      "capabilities": {},
+      "clientInfo": {"name": "my-client", "version": "1.0"}
+    }
+  }' 2>&1 | grep -i "mcp-session-id"
+
+# Save the session ID from the response, e.g.: abc123
+SESSION_ID="abc123"
 ```
 
-RHEL/Rocky/Alma/Fedora:
+**Step 2: List Tables**
 
 ```bash
-sudo dnf install -y ./faircom-mcp-<version>-1.noarch.rpm
+curl -X POST http://127.0.0.1:8000/mcp \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/list",
+    "params": {}
+  }' 2>&1 | grep -A 5 "list_tables"
 ```
 
-Package installs:
-- systemd service: `/usr/lib/systemd/system/faircom-mcp.service`
-- environment file: `/etc/faircom-mcp/faircom-mcp.env`
-- logrotate policy: `/etc/logrotate.d/faircom-mcp`
-
-## Configure FairCom Connectivity
-
-Edit `/etc/faircom-mcp/faircom-mcp.env`.
-
-Required:
-- `FAIRCOM_API_BASE_URL`
-- one authentication mode:
-  - `FAIRCOM_API_USERNAME` + `FAIRCOM_API_PASSWORD`, or
-  - `FAIRCOM_API_TOKEN`
-
-Recommended baseline:
+**Step 3: Describe a Table**
 
 ```bash
+# Let's examine the "customers" table
+curl -X POST http://127.0.0.1:8000/mcp \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "describe_table",
+      "arguments": {"table_name": "customers"}
+    }
+  }' 2>&1 | tail -20
+```
+
+**Step 4: Query Data**
+
+```bash
+# Count customers
+curl -X POST http://127.0.0.1:8000/mcp \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "sql_query",
+      "arguments": {
+        "statement": "SELECT COUNT(*) as total FROM customers"
+      }
+    }
+  }' 2>&1 | tail -20
+```
+
+**Step 5: Configure in Claude/Copilot**
+
+For **Claude Desktop**:
+```json
+{
+  "mcpServers": {
+    "faircom": {
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp"
+    }
+  }
+}
+```
+
+For **GitHub Copilot** (VS Code):
+```json
+{
+  "mcpServers": {
+    "faircom": {
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp"
+    }
+  }
+}
+```
+
+Then ask your AI assistant: *"Show me a count of customers by region"* – it will use FairCom MCP to execute the query.
+
+## Configuration
+
+Edit `/etc/faircom-mcp/faircom-mcp.env` (package install) or pass as environment variables (Docker):
+
+```bash
+# Required: FairCom connectivity
 FAIRCOM_API_BASE_URL=https://faircom.example.com:9443
-FAIRCOM_API_USERNAME=ADMIN
+FAIRCOM_API_USERNAME=ADMIN           # or use FAIRCOM_API_TOKEN
 FAIRCOM_API_PASSWORD=ADMIN
+
+# Optional: Server binding
 FAIRCOM_HTTP_HOST=0.0.0.0
 FAIRCOM_HTTP_PORT=8000
-FAIRCOM_TLS_VERIFY=true
-```
 
-If using internal/self-signed certificates:
+# Optional: TLS
+FAIRCOM_TLS_VERIFY=true              # Set to false for self-signed certs
 
-```bash
-FAIRCOM_TLS_VERIFY=false
-```
-
-## Authentication Behavior (Important)
-
-FairCom MCP uses FairCom JSON action session semantics:
-
-- Username/password mode:
-  - MCP server creates a FairCom session with `api: "admin"`, action `createSession`.
-  - Request shape uses `params.username` and `params.password`.
-  - Returned FairCom `authToken` is cached and sent on subsequent DB actions.
-
-- Token mode (`FAIRCOM_API_TOKEN`):
-  - Token is sent as FairCom JSON `authToken` in action requests.
-  - This token must be a valid FairCom session token for the target server.
-
-- API-level errors:
-  - FairCom may return HTTP 200 with non-zero `errorCode`.
-  - MCP server treats non-zero `errorCode` as failure and surfaces it as tool error.
-
-## Start Service (Package Install)
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now faircom-mcp.service
-sudo systemctl status faircom-mcp.service --no-pager
-```
-
-After config changes:
-
-```bash
-sudo systemctl restart faircom-mcp.service
-```
-
-## API Endpoints
-
-```text
-GET  /health
-GET  /healthz
-GET  /ready
-GET  /readyz
-GET  /metrics
-GET  /diagnostics
-GET  /diagnostics/json
-POST /mcp
-```
-
-`/mcp` is MCP JSON-RPC over HTTP (SSE response framing).
-
-Required MCP request headers:
-
-```text
-Accept: application/json, text/event-stream
-Content-Type: application/json
-```
-
-Session behavior:
-- `initialize` response includes `mcp-session-id` header.
-- Send `Mcp-Session-Id: <value>` on `tools/list`, `tools/call`, etc.
-
-## MCP Client Configuration Examples
-
-### VS Code / GitHub Copilot
-
-Add in user settings JSON or `.vscode/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "faircom-mcp": {
-      "type": "http",
-      "url": "http://127.0.0.1:8000/mcp"
-    }
-  }
-}
-```
-
-### Claude Code CLI
-
-Add in `~/.claude/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "faircom-mcp": {
-      "type": "http",
-      "url": "http://127.0.0.1:8000/mcp"
-    }
-  }
-}
-```
-
-## Available MCP Tools
-
-```text
-list_tables(name_like?)
-describe_table(table_name)
-list_table_columns(table_name)
-list_table_indexes(table_name)
-sql_query(statement, params?)
-sql_query_page(statement, params?, page, page_size)
-sql_execute(statement, params?, confirm_write)
-runtime_status()
-```
-
-Safety and policy behavior:
-- `sql_execute` requires `confirm_write=true`; otherwise request is rejected.
-- Tool groups can be restricted with `FAIRCOM_TOOL_GROUP_ALLOWLIST`.
-- SQL allow/deny policy can be tuned with `FAIRCOM_SQL_ALLOWLIST` and `FAIRCOM_SQL_DENYLIST`.
-
-Paginated query metadata:
-
-```text
-has_more: <bool>
-next_page: <int|null>
-next_cursor: <int|null>
-```
-
-## Optional Runtime Controls
-
-Tool-group allowlist:
-
-```bash
+# Optional: Safety controls
 FAIRCOM_TOOL_GROUP_ALLOWLIST=metadata,query,write,admin,diagnostics
+FAIRCOM_SQL_ALLOWLIST=SELECT,INSERT,UPDATE,DELETE
+FAIRCOM_SQL_DENYLIST=DROP,TRUNCATE,ALTER
 ```
 
-Diagnostics and observability:
+## Available Tools
+
+| Tool | Purpose | Safety |
+|---|---|---|
+| `list_tables(name_like?)` | Discover tables | Read-only |
+| `describe_table(table_name)` | Get columns, indexes, constraints | Read-only |
+| `list_table_columns(table_name)` | Column names and types | Read-only |
+| `list_table_indexes(table_name)` | Index details | Read-only |
+| `sql_query(statement, params?)` | Execute SELECT (read-only) | Read-only |
+| `sql_query_page(statement, params?, page, page_size)` | Paginated SELECT | Read-only |
+| `sql_execute(statement, params?, confirm_write)` | INSERT/UPDATE/DELETE (requires `confirm_write=true`) | Write |
+| `runtime_status()` | Health, version, diagnostics | Read-only |
+
+## Observability & Operations
+
+### Health Endpoints
 
 ```bash
-FAIRCOM_ENABLE_DIAGNOSTICS_UI=true
-FAIRCOM_DIAGNOSTICS_TOKEN=replace-with-strong-token
-FAIRCOM_ENABLE_METRICS=true
-FAIRCOM_ENABLE_TRACING=false
+GET  /health       # Simple health check (JSON)
+GET  /healthz      # Kubernetes-style liveness
+GET  /ready        # Readiness check (JSON)
+GET  /readyz       # Kubernetes-style readiness
+GET  /metrics      # Prometheus-compatible metrics
+GET  /diagnostics  # Human-readable diagnostics
+GET  /diagnostics/json  # Machine-readable diagnostics
 ```
 
-Diagnostics access:
-- `GET /diagnostics`
-- `GET /diagnostics/json`
-- Provide token in header `x-diagnostics-token` or query `token`.
+### Logs
 
-## Validation Commands
-
+Package install:
 ```bash
-curl -fsS http://127.0.0.1:8000/health
-curl -fsS http://127.0.0.1:8000/ready
-curl -fsS http://127.0.0.1:8000/metrics
+journalctl -u faircom-mcp -f       # Follow logs
+journalctl -u faircom-mcp --since 1h # Last hour
 ```
 
-## Documentation Map
+Docker:
+```bash
+docker logs -f faircom-mcp
+```
 
-- `BUILD.md`: build, packaging, CI/CD, and release flow for maintainers
-- `docs/operations-runbook.md`: operations lifecycle and troubleshooting
-- `docs/support-matrix.md`: validated distro and packaging support targets
-- `docs/testing.md`: test strategy and FairCom Edge runtime validation
-- `docs/release-notes-template.md`: release note scaffold
+### Log Rotation
 
-## Project Notes
+Package install includes logrotate policy:
+```bash
+/var/log/faircom-mcp/faircom-mcp.log {
+  daily
+  rotate 7
+  compress
+  delaycompress
+  notifempty
+  missingok
+}
+```
 
-- Integrates directly with FairCom JSON API.
-- Does not depend on FairCom CLI tools.
-- Supports HTTP MCP transport and package-based Linux deployments.
+## Development
+
+See [BUILD.md](BUILD.md) for building, testing, and releasing.
+
+## Community
+
+- **Issues**: [GitHub Issues](https://github.com/toddstoffel/faircom-mcp/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/toddstoffel/faircom-mcp/discussions)
+- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md) (coming soon)
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for terms.
+
+## Support
+
+For FairCom-specific questions: https://www.faircom.com/support  
+For MCP integration issues: Open a GitHub issue
+
+---
+
+**Built for the FairCom community.** Query with confidence. Automate with safety.
