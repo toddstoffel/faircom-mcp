@@ -45,6 +45,32 @@ make compose-up
 make compose-down
 ```
 
+## Container Image Build Targets
+The Dockerfile has separate stages for package building and runtime images.
+
+Build Debian runtime image (installs generated `.deb` package):
+
+```bash
+docker build --target runtime-deb -t faircom-mcp:deb .
+```
+
+Build RPM runtime image (installs generated `.rpm` package):
+
+```bash
+docker build --target runtime-rpm -t faircom-mcp:rpm .
+```
+
+Default target is Debian runtime:
+
+```bash
+docker build -t faircom-mcp:local .
+```
+
+Notes:
+- `package-builder` stage builds Debian package artifacts
+- `package-builder-rpm` stage builds RPM package artifacts
+- runtime stages install those package artifacts to mirror customer installs
+
 ## Package Build And Validation
 Validate packaging tree consistency:
 

@@ -113,6 +113,70 @@ GET /diagnostics/json
 
 Pass diagnostics token using header `x-diagnostics-token` or query parameter `token`.
 
+## API Endpoints
+HTTP service endpoints exposed by FairCom MCP:
+
+```text
+GET  /health
+GET  /healthz
+GET  /ready
+GET  /readyz
+GET  /metrics
+GET  /diagnostics
+GET  /diagnostics/json
+POST /mcp
+```
+
+Use `/mcp` for MCP JSON-RPC over HTTP. The server responds as SSE (`text/event-stream`) with JSON-RPC payload in `event: message` frames.
+
+### MCP HTTP Protocol Usage
+Required request headers for MCP calls:
+
+```text
+Accept: application/json, text/event-stream
+Content-Type: application/json
+```
+
+Session behavior:
+- `initialize` response includes `mcp-session-id` header
+- send `Mcp-Session-Id: <value>` on subsequent calls (`tools/list`, `tools/call`, etc.)
+
+Example initialize request:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/mcp \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'Content-Type: application/json' \
+    --data '{
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "example-client", "version": "1.0"}
+        }
+    }'
+```
+
+Example tool invocation (`runtime_status`) after initialization:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/mcp \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'Content-Type: application/json' \
+    -H 'Mcp-Session-Id: <session-id-from-initialize>' \
+    --data '{
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "runtime_status",
+            "arguments": {}
+        }
+    }'
+```
+
 ## Available MCP Tools
 Core SQL and metadata tools:
 
@@ -152,26 +216,3 @@ If a blocked group is invoked, the server returns a validation error with policy
 
 ## Notes
 - This project uses direct FairCom JSON API integration and does not depend on FairCom CLI tools.
-
-## Container Images From Linux Packages
-The Docker build installs the server from the same Linux packages customers use.
-
-Build Debian-based runtime image (installs generated `.deb` package):
-
-```bash
-docker build --target runtime-deb -t faircom-mcp:deb .
-```
-
-Build RPM-based runtime image (installs generated `.rpm` package):
-
-```bash
-docker build --target runtime-rpm -t faircom-mcp:rpm .
-```
-
-Default Docker target is Debian runtime:
-
-```bash
-docker build -t faircom-mcp:local .
-```
-
-Both runtime targets build packages in the `package-builder` stage and install them into the final image so container behavior matches package-installed customer deployments.
