@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+if command -v systemd-sysusers >/dev/null 2>&1; then
+  systemd-sysusers /usr/lib/sysusers.d/faircom-mcp.conf || true
+fi
+
+if command -v systemd-tmpfiles >/dev/null 2>&1; then
+  systemd-tmpfiles --create /usr/lib/tmpfiles.d/faircom-mcp.conf || true
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload || true
+fi
+
+exit 0

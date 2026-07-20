@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+
+      - name: Check formatting
+        run: ruff format --check src tests
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Type check
+        run: mypy src
+
+      - name: Unit and integration tests
+        run: pytest
+
+  linux-packages:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Install package build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
+
+      - name: Build Linux packages
+        run: make package-build
+
+      - name: Inspect package metadata
+        run: |
+          dpkg-deb --info dist/packages/*.deb
+          rpm -qip dist/packages/*.rpm
+
+      - name: Validate package lifecycle
+        run: make package-validate
+
+      - name: Install integrity tooling
+        run: python -m pip install cyclonedx-bom
+
+      - name: Generate integrity artifacts
+        run: make release-integrity
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: faircom-mcp-packages-${{ github.sha }}
+          path: |
+            dist/packages/*
+            dist/sbom.cdx.json
+            dist/SHA256SUMS

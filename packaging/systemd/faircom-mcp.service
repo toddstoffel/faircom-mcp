@@ -1,0 +1,27 @@
+[Unit]
+Description=FairCom MCP Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=faircom-mcp
+Group=faircom-mcp
+EnvironmentFile=-/etc/faircom-mcp/faircom-mcp.env
+Environment=FAIRCOM_HTTP_HOST=0.0.0.0
+Environment=FAIRCOM_HTTP_PORT=8000
+ExecStart=/usr/bin/faircom-mcp-server --transport http
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=faircom-mcp
+StateDirectory=faircom-mcp
+LogsDirectory=faircom-mcp
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+Source: faircom-mcp
+Section: net
+Priority: optional
+Maintainer: FairCom <support@faircom.com>
+Standards-Version: 4.6.2
+Build-Depends: debhelper-compat (= 13), dh-python, python3, python3-setuptools, python3-wheel
+
+Package: faircom-mcp
+Architecture: all
+Depends: ${misc:Depends}, ${python3:Depends}, python3, python3-pip, ca-certificates, adduser, systemd
+Description: FairCom MCP server
+ Production-grade MCP server for the FairCom JSON API.
