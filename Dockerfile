@@ -16,8 +16,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN python3 -m pip install --upgrade pip \
-    && python3 -m pip install .
+RUN python3 -m pip install --break-system-packages .
 
 RUN useradd --system --home-dir /var/lib/faircom-mcp --create-home --shell /usr/sbin/nologin faircom-mcp \
     && mkdir -p /var/log/faircom-mcp /run/faircom-mcp \
