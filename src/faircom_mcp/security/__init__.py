@@ -36,3 +36,27 @@ class SqlStatementPolicy:
 					"policy": "denylist",
 				},
 			)
+
+
+@dataclass(slots=True, frozen=True)
+class ToolGroupPolicy:
+	allowlist: tuple[str, ...] = (
+		"metadata",
+		"query",
+		"write",
+		"admin",
+		"diagnostics",
+	)
+
+	def validate(self, group: str) -> None:
+		normalized_group = group.strip().lower()
+		if normalized_group in self.allowlist:
+			return
+
+		raise ValidationFailure(
+			"Tool group is not permitted by policy",
+			details={
+				"policy": "tool_group_allowlist",
+				"group": normalized_group,
+			},
+		)

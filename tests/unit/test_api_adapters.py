@@ -38,6 +38,32 @@ def test_table_adapter_calls_expected_actions() -> None:
     ]
 
 
+def test_table_adapter_extracts_columns_and_indexes() -> None:
+    client = StubClient()
+    adapter = TableAdapter(cast(Any, client))
+
+    client.post_action = lambda action, payload=None: {
+        "action": action,
+        "payload": payload,
+        "columns": [{"name": "id"}, {"name": "name"}],
+        "indexes": [{"name": "pk_customers"}],
+    }
+
+    columns = adapter.list_table_columns("customers")
+    indexes = adapter.list_table_indexes("customers")
+
+    assert columns == {
+        "table_name": "customers",
+        "columns": [{"name": "id"}, {"name": "name"}],
+        "column_count": 2,
+    }
+    assert indexes == {
+        "table_name": "customers",
+        "indexes": [{"name": "pk_customers"}],
+        "index_count": 1,
+    }
+
+
 def test_sql_adapter_calls_expected_actions() -> None:
     client = StubClient()
     adapter = SQLAdapter(cast(Any, client))

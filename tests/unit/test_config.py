@@ -28,6 +28,11 @@ def test_load_config_accepts_username_password_auth() -> None:
             "FAIRCOM_HTTP_PORT": "9001",
             "FAIRCOM_SQL_ALLOWLIST": "SELECT,WITH",
             "FAIRCOM_SQL_DENYLIST": "DROP,TRUNCATE",
+            "FAIRCOM_TOOL_GROUP_ALLOWLIST": "metadata,query,admin",
+            "FAIRCOM_DIAGNOSTICS_TOKEN": "diag-token",
+            "FAIRCOM_ENABLE_DIAGNOSTICS_UI": "true",
+            "FAIRCOM_ENABLE_METRICS": "false",
+            "FAIRCOM_ENABLE_TRACING": "true",
         }
     )
 
@@ -38,6 +43,11 @@ def test_load_config_accepts_username_password_auth() -> None:
     assert config.transport.port == 9001
     assert config.security.sql_allowlist == ("SELECT", "WITH")
     assert config.security.sql_denylist == ("DROP", "TRUNCATE")
+    assert config.security.tool_group_allowlist == ("metadata", "query", "admin")
+    assert config.security.diagnostics_token == "diag-token"
+    assert config.security.diagnostics_enabled is True
+    assert config.observability.enable_metrics is False
+    assert config.observability.enable_tracing is True
 
 
 def test_load_config_fails_without_base_url() -> None:

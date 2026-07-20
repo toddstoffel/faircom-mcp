@@ -2,16 +2,6 @@
 
 Production-grade MCP server for FairCom JSON API with enterprise Linux operational standards.
 
-## Status
-- Phase 0-5 complete.
-- Phase 6 complete: container runtime, Linux packaging artifacts, release workflow,
-  and package lifecycle validation.
-- Phase 7 in progress.
-- Delivered so far:
-    - `sql_query_page` tool for paginated SQL reads.
-    - Deterministic pagination metadata in responses: `has_more`, `next_page`.
-    - Cursor-compatibility alias: `next_cursor`.
-
 ## Development Setup
 1. Install package + dev dependencies into local system/user Python:
 
@@ -54,7 +44,7 @@ HTTP mode:
 
 ```bash
 faircom-mcp-server --transport http
-curl -fsS http://127.0.0.1:8000/health
+curl -fsS http://127.0.0.1:8000/healthz
 ```
 
 STDIO mode:
@@ -63,7 +53,7 @@ STDIO mode:
 faircom-mcp-server --transport stdio
 ```
 
-## Phase 7 Capability (In Progress)
+## Paginated SQL Queries
 Use paginated SQL query mode for large result sets:
 
 ```text
@@ -81,6 +71,59 @@ Response includes deterministic iteration metadata:
 has_more: <bool>
 next_page: <int|null>
 next_cursor: <int|null>
+```
+
+## Metadata And Admin Tools
+The server also exposes metadata and runtime inspection tools:
+
+```text
+list_table_columns(table_name)
+list_table_indexes(table_name)
+runtime_status()
+```
+
+## Tool-Group Policy Controls
+Restrict tool groups with an allowlist:
+
+```bash
+export FAIRCOM_TOOL_GROUP_ALLOWLIST="metadata,query,write,admin,diagnostics"
+```
+
+Supported groups:
+- `metadata`: table and schema metadata tools
+- `query`: read-only SQL query tools
+- `write`: mutating SQL execute tools
+- `admin`: runtime inspection tools
+- `diagnostics`: diagnostics endpoints
+
+If a blocked group is invoked, the server returns a validation error with policy details.
+
+## Metrics And Diagnostics
+Prometheus-style metrics are enabled by default at:
+
+```text
+GET /metrics
+```
+
+Optional diagnostics endpoints:
+
+```bash
+export FAIRCOM_ENABLE_DIAGNOSTICS_UI=true
+export FAIRCOM_DIAGNOSTICS_TOKEN="replace-with-strong-token"
+```
+
+When enabled, diagnostics endpoints require either header `x-diagnostics-token`
+or query parameter `token`:
+
+```text
+GET /diagnostics
+GET /diagnostics/json
+```
+
+Optional tracing integration can be enabled with:
+
+```bash
+export FAIRCOM_ENABLE_TRACING=true
 ```
 
 ## Packaging Artifacts

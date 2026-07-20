@@ -6,7 +6,7 @@ from os import environ
 from urllib.parse import urlparse
 
 from faircom_mcp.errors import ConfigurationError
-from faircom_mcp.security import SqlStatementPolicy
+from faircom_mcp.security import SqlStatementPolicy, ToolGroupPolicy
 
 
 def _parse_bool(value: str | bool | None, *, default: bool) -> bool:
@@ -56,12 +56,30 @@ class TransportConfig:
 class SecurityConfig:
     sql_allowlist: tuple[str, ...] = ()
     sql_denylist: tuple[str, ...] = ()
+    tool_group_allowlist: tuple[str, ...] = (
+        "metadata",
+        "query",
+        "write",
+        "admin",
+        "diagnostics",
+    )
+    diagnostics_token: str | None = None
+    diagnostics_enabled: bool = False
 
     def to_sql_policy(self) -> SqlStatementPolicy:
         return SqlStatementPolicy(
             allowlist=self.sql_allowlist,
             denylist=self.sql_denylist,
         )
+
+    def to_tool_group_policy(self) -> ToolGroupPolicy:
+        return ToolGroupPolicy(allowlist=self.tool_group_allowlist)
+
+
+@dataclass(slots=True)
+class ObservabilityConfig:
+    enable_metrics: bool = True
+    enable_tracing: bool = False
 
 
 @dataclass(slots=True)
@@ -70,6 +88,7 @@ class AppConfig:
     auth: AuthConfig
     transport: TransportConfig
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     tls_verify: bool = True
 
 
@@ -139,6 +158,26 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
     security = SecurityConfig(
         sql_allowlist=_parse_csv_values(env_values.get("FAIRCOM_SQL_ALLOWLIST")),
         sql_denylist=_parse_csv_values(env_values.get("FAIRCOM_SQL_DENYLIST")),
+        tool_group_allowlist=tuple(
+            value.lower()
+            for value in _parse_csv_values(env_values.get("FAIRCOM_TOOL_GROUP_ALLOWLIST"))
+        )
+        or SecurityConfig().tool_group_allowlist,
+        diagnostics_token=env_values.get("FAIRCOM_DIAGNOSTICS_TOKEN"),
+        diagnostics_enabled=_parse_bool(
+            env_values.get("FAIRCOM_ENABLE_DIAGNOSTICS_UI"),
+            default=False,
+        ),
+    )
+    observability = ObservabilityConfig(
+        enable_metrics=_parse_bool(
+            env_values.get("FAIRCOM_ENABLE_METRICS"),
+            default=True,
+        ),
+        enable_tracing=_parse_bool(
+            env_values.get("FAIRCOM_ENABLE_TRACING"),
+            default=False,
+        ),
     )
 
     return AppConfig(
@@ -146,5 +185,6 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         auth=auth,
         transport=TransportConfig(host=host, port=port),
         security=security,
+        observability=observability,
         tls_verify=tls_verify,
     )
