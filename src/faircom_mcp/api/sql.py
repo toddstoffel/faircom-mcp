@@ -45,7 +45,8 @@ class SQLAdapter:
         }
         if params is not None:
             payload["params"] = list(params)
-        return self._client.post_action("sql_query", payload)
+        result = self._client.post_action("sql_query", payload)
+        return self._with_pagination_metadata(result, page=page, page_size=page_size)
 
     def execute(self, statement: str, params: Sequence[Any] | None = None) -> Any:
         self._validate_statement(statement, operation="sql_execute")
@@ -57,3 +58,15 @@ class SQLAdapter:
     def _validate_statement(self, statement: str, *, operation: str) -> None:
         if self._policy is not None:
             self._policy.validate(statement, operation=operation)
+
+    def _with_pagination_metadata(self, result: Any, *, page: int, page_size: int) -> Any:
+        if not isinstance(result, dict):
+            return result
+
+        rows = result.get("rows")
+        has_more = isinstance(rows, list) and len(rows) == page_size
+
+        enriched = dict(result)
+        enriched["has_more"] = has_more
+        enriched["next_page"] = page + 1 if has_more else None
+        return enriched

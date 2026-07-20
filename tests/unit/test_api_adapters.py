@@ -61,6 +61,16 @@ def test_sql_adapter_paginated_query_calls_expected_action() -> None:
     client = StubClient()
     adapter = SQLAdapter(cast(Any, client))
 
+    # Simulate a page with exactly page_size rows so metadata should indicate another page.
+    client.post_action = lambda action, payload=None: {
+        "action": action,
+        "payload": payload,
+        "rows": [
+            {"id": 1},
+            {"id": 2},
+        ],
+    }
+
     page_result = adapter.query_page(
         "SELECT * FROM customers ORDER BY id",
         ["active"],
@@ -75,6 +85,32 @@ def test_sql_adapter_paginated_query_calls_expected_action() -> None:
         "page": 2,
         "pageSize": 250,
     }
+    assert page_result["has_more"] is False
+    assert page_result["next_page"] is None
+
+
+def test_sql_adapter_paginated_query_adds_cursor_metadata() -> None:
+    client = StubClient()
+    adapter = SQLAdapter(cast(Any, client))
+
+    client.post_action = lambda action, payload=None: {
+        "action": action,
+        "payload": payload,
+        "rows": [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+        ],
+    }
+
+    page_result = adapter.query_page(
+        "SELECT * FROM customers ORDER BY id",
+        page=1,
+        page_size=3,
+    )
+
+    assert page_result["has_more"] is True
+    assert page_result["next_page"] == 2
 
 
 def test_sql_adapter_paginated_query_validates_paging_inputs() -> None:
