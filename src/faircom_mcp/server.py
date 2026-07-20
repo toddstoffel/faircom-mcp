@@ -75,16 +75,24 @@ def create_server(
             provided = request.query_params.get("token")
         return provided == token
 
-    @server.custom_route("/healthz", methods=["GET"])
-    async def healthz(_request: Request) -> JSONResponse:
+    @server.custom_route("/health", methods=["GET"])
+    async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
-    @server.custom_route("/readyz", methods=["GET"])
-    async def readyz(_request: Request) -> JSONResponse:
+    @server.custom_route("/healthz", methods=["GET"])
+    async def healthz(_request: Request) -> JSONResponse:
+        return await health(_request)
+
+    @server.custom_route("/ready", methods=["GET"])
+    async def ready(_request: Request) -> JSONResponse:
         is_ready = bool(readiness_check() if readiness_check is not None else True)
         status_code = 200 if is_ready else 503
         status = "ready" if is_ready else "not_ready"
         return JSONResponse({"status": status}, status_code=status_code)
+
+    @server.custom_route("/readyz", methods=["GET"])
+    async def readyz(_request: Request) -> JSONResponse:
+        return await ready(_request)
 
     if resolved_config.observability.enable_metrics:
 

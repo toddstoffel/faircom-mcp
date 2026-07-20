@@ -167,7 +167,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
 
     assert isinstance(server, fake_class)
     assert captured == [config]
-    assert [path for path, _handler in server.routes] == ["/healthz", "/readyz", "/metrics"]
+    assert [path for path, _handler in server.routes] == [
+        "/health",
+        "/healthz",
+        "/ready",
+        "/readyz",
+        "/metrics",
+    ]
     assert list(server.tools) == [
         "list_tables",
         "describe_table",
@@ -181,7 +187,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
 
     app = server.http_app()
 
+    assert _get("/health", app).json() == {"status": "ok"}
     assert _get("/healthz", app).json() == {"status": "ok"}
+    assert _get("/ready", app).json() == {"status": "ready"}
     assert _get("/readyz", app).json() == {"status": "ready"}
     assert server.tools["list_tables"]() == {
         "tables": [],

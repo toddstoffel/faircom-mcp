@@ -92,9 +92,11 @@ sudo systemctl restart faircom-mcp.service
 Health checks:
 
 ```bash
-curl -fsS http://127.0.0.1:8000/healthz
-curl -fsS http://127.0.0.1:8000/readyz
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS http://127.0.0.1:8000/ready
 ```
+
+Compatibility aliases are also available at `/healthz` and `/readyz`.
 
 Metrics endpoint (enabled by default):
 

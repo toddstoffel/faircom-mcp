@@ -11,10 +11,10 @@ from starlette.routing import Route
 def create_health_app(readiness_check: Callable[[], bool] | None = None) -> Starlette:
     check = readiness_check or (lambda: True)
 
-    async def healthz(_request: Request) -> JSONResponse:
+    async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
-    async def readyz(_request: Request) -> JSONResponse:
+    async def ready(_request: Request) -> JSONResponse:
         is_ready = bool(check())
         status_code = 200 if is_ready else 503
         status = "ready" if is_ready else "not_ready"
@@ -22,7 +22,9 @@ def create_health_app(readiness_check: Callable[[], bool] | None = None) -> Star
 
     return Starlette(
         routes=[
-            Route("/healthz", endpoint=healthz),
-            Route("/readyz", endpoint=readyz),
+            Route("/health", endpoint=health),
+            Route("/healthz", endpoint=health),
+            Route("/ready", endpoint=ready),
+            Route("/readyz", endpoint=ready),
         ]
     )
