@@ -68,5 +68,7 @@ class SQLAdapter:
 
         enriched = dict(result)
         enriched["has_more"] = has_more
-        enriched["next_page"] = page + 1 if has_more else None
+        next_page = page + 1 if has_more else None
+        enriched["next_page"] = next_page
+        enriched["next_cursor"] = next_page
         return enriched

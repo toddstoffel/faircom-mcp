@@ -87,6 +87,7 @@ def test_sql_adapter_paginated_query_calls_expected_action() -> None:
     }
     assert page_result["has_more"] is False
     assert page_result["next_page"] is None
+    assert page_result["next_cursor"] is None
 
 
 def test_sql_adapter_paginated_query_adds_cursor_metadata() -> None:
@@ -111,6 +112,7 @@ def test_sql_adapter_paginated_query_adds_cursor_metadata() -> None:
 
     assert page_result["has_more"] is True
     assert page_result["next_page"] == 2
+    assert page_result["next_cursor"] == 2
 
 
 def test_sql_adapter_paginated_query_validates_paging_inputs() -> None:
