@@ -20,26 +20,26 @@ jobs:
         run: |
           VERSION=${{ github.ref_name }}
           VERSION=${VERSION#v}  # Strip leading 'v'
-          
+
           # Use Python to safely update version in [project] section
           python3 - "$VERSION" << 'PYTHON_EOF'
           import sys
           import re
-          
+
           version = sys.argv[1]
           with open('pyproject.toml', 'r') as f:
               content = f.read()
-          
+
           # Find [project] section and replace version field
           # Match: [project] ... name = "faircom-mcp" ... version = "..."
           pattern = r'(\[project\][\s\S]*?name = "faircom-mcp"\s*)version = "[^"]*"'
           content = re.sub(pattern, rf'\1version = "{version}"', content, count=1)
-          
+
           with open('pyproject.toml', 'w') as f:
               f.write(content)
-          
+
           print(f"✓ Updated pyproject.toml to version {version}")
-          
+
           # Verify the change
           with open('pyproject.toml', 'r') as f:
               for line in f:
