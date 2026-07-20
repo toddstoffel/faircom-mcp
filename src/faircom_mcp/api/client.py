@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from threading import Lock
 from typing import Any
 
 import httpx
@@ -23,7 +24,10 @@ class FaircomAPIClient:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._max_read_retries = max(0, max_read_retries)
-        client_auth, token_header = self._build_auth(auth)
+        self._auth = auth
+        self._session_lock = Lock()
+        self._session_auth_token: str | None = auth.token
+        client_auth, token_header = self._build_http_auth(auth)
 
         headers: dict[str, str] = {"Accept": "application/json"}
         if token_header is not None:
@@ -136,7 +140,7 @@ class FaircomAPIClient:
                 )
 
             try:
-                return response.json()
+                payload = response.json()
             except ValueError as exc:
                 raise UpstreamAPIError(
                     "FairCom API returned non-JSON response",
@@ -147,6 +151,9 @@ class FaircomAPIClient:
                     },
                     retryable=False,
                 ) from exc
+
+            self._raise_if_api_error(payload, method=method_upper, path=path)
+            return payload
 
         raise UpstreamAPIError(
             "FairCom API request exhausted retry attempts",
@@ -161,9 +168,15 @@ class FaircomAPIClient:
         *,
         path: str = "/api/v1/action",
     ) -> Any:
-        body: dict[str, Any] = {"action": action}
+        body: dict[str, Any] = {
+            "api": "db",
+            "action": action,
+        }
         if payload:
-            body["payload"] = dict(payload)
+            body["params"] = dict(payload)
+        auth_token = self._get_action_auth_token()
+        if auth_token:
+            body["authToken"] = auth_token
         return self.request_json("POST", path, json_body=body, idempotent=False)
 
     @staticmethod
@@ -173,15 +186,79 @@ class FaircomAPIClient:
         return method in IDEMPOTENT_METHODS
 
     @staticmethod
-    def _build_auth(auth: AuthConfig) -> tuple[httpx.Auth | None, str | None]:
+    def _build_http_auth(auth: AuthConfig) -> tuple[httpx.Auth | None, str | None]:
         if auth.token:
-            return None, f"Bearer {auth.token}"
+            return None, None
 
         if auth.username and auth.password:
-            return httpx.BasicAuth(auth.username, auth.password), None
+            return None, None
 
         raise ConfigurationError(
             "Auth configuration is missing required credentials",
+        )
+
+    def _get_action_auth_token(self) -> str:
+        if self._session_auth_token:
+            return self._session_auth_token
+
+        # Session creation is required for username/password mode.
+        with self._session_lock:
+            if self._session_auth_token:
+                return self._session_auth_token
+
+            if not self._auth.username or not self._auth.password:
+                raise ConfigurationError(
+                    "Auth configuration is missing required credentials",
+                )
+
+            payload = self.request_json(
+                "POST",
+                "/api/v1/action",
+                json_body={
+                    "api": "admin",
+                    "action": "createSession",
+                    "params": {
+                        "username": self._auth.username,
+                        "password": self._auth.password,
+                        "defaultApi": "db",
+                        "defaultDebug": "none",
+                    },
+                },
+                idempotent=False,
+            )
+            token = payload.get("authToken") if isinstance(payload, dict) else None
+            if not token:
+                raise UpstreamAPIError(
+                    "FairCom createSession did not return authToken",
+                    details={"path": "/api/v1/action", "action": "createSession"},
+                    retryable=False,
+                )
+            self._session_auth_token = str(token)
+            return self._session_auth_token
+
+    @staticmethod
+    def _raise_if_api_error(payload: Any, *, method: str, path: str) -> None:
+        if not isinstance(payload, dict):
+            return
+
+        error_code = payload.get("errorCode")
+        if not isinstance(error_code, int):
+            return
+        if error_code == 0:
+            return
+
+        raise UpstreamAPIError(
+            "FairCom API returned an application error",
+            details={
+                "method": method,
+                "path": path,
+                "errorCode": error_code,
+                "errorMessage": payload.get("errorMessage"),
+                "request": payload.get("debugInfo", {}).get("request")
+                if isinstance(payload.get("debugInfo"), dict)
+                else None,
+            },
+            retryable=False,
         )
 
 

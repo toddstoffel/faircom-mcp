@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-
 import httpx
 import pytest
 
@@ -108,24 +106,34 @@ def test_malformed_json_raises_upstream_error() -> None:
 
 
 @pytest.mark.parametrize(
-    ("auth", "validator"),
+    ("auth", "expected_token"),
     [
-        (AuthConfig(token="abc"), "token"),
-        (AuthConfig(username="user", password="pass"), "basic"),
+        (AuthConfig(token="abc"), "abc"),
+        (AuthConfig(username="user", password="pass"), "session-token"),
     ],
 )
 def test_client_applies_expected_auth_headers(
     auth: AuthConfig,
-    validator: str,
+    expected_token: str,
 ) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        header_value = request.headers.get("Authorization", "")
+    create_session_calls = {"count": 0}
 
-        if validator == "token":
-            assert header_value == "Bearer abc"
-        else:
-            expected = base64.b64encode(b"user:pass").decode("ascii")
-            assert header_value == f"Basic {expected}"
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read().decode("utf-8")
+        if '"action":"createSession"' in body:
+            create_session_calls["count"] += 1
+            return _response(
+                200,
+                {
+                    "authToken": "session-token",
+                    "result": {"authToken": "session-token"},
+                    "errorCode": 0,
+                    "errorMessage": "",
+                },
+                request,
+            )
+
+        assert f'"authToken":"{expected_token}"' in body
 
         return _response(200, {"ok": True}, request)
 
@@ -135,6 +143,33 @@ def test_client_applies_expected_auth_headers(
         transport=httpx.MockTransport(handler),
     )
 
-    result = client.request_json("GET", "/api/v1/resource")
+    result = client.post_action("listTables")
 
     assert result == {"ok": True}
+    if auth.token:
+        assert create_session_calls["count"] == 0
+    else:
+        assert create_session_calls["count"] == 1
+
+
+def test_non_zero_error_code_raises_upstream_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _response(
+            200,
+            {
+                "errorCode": 12025,
+                "errorMessage": "Missing authToken",
+            },
+            request,
+        )
+
+    client = FaircomAPIClient(
+        base_url="https://example.test",
+        auth=AuthConfig(token="tkn"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(UpstreamAPIError) as exc:
+        client.request_json("POST", "/api/v1/action", json_body={"action": "x"})
+
+    assert exc.value.details["errorCode"] == 12025

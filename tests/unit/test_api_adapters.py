@@ -28,13 +28,13 @@ def test_table_adapter_calls_expected_actions() -> None:
     tables_result = adapter.list_tables("cust%")
     describe_result = adapter.describe_table("customers")
 
-    assert tables_result["action"] == "list_tables"
+    assert tables_result["action"] == "listTables"
     assert tables_result["payload"] == {"tableNameLike": "cust%"}
-    assert describe_result["action"] == "describe_table"
-    assert describe_result["payload"] == {"tableName": "customers"}
+    assert describe_result["action"] == "describeTables"
+    assert describe_result["payload"] == {"tableNames": ["customers"]}
     assert client.calls == [
-        ("list_tables", {"tableNameLike": "cust%"}),
-        ("describe_table", {"tableName": "customers"}),
+        ("listTables", {"tableNameLike": "cust%"}),
+        ("describeTables", {"tableNames": ["customers"]}),
     ]
 
 
@@ -71,15 +71,15 @@ def test_sql_adapter_calls_expected_actions() -> None:
     query_result = adapter.query("SELECT * FROM customers WHERE id = ?", [123])
     exec_result = adapter.execute("DELETE FROM customers WHERE id = ?", [123])
 
-    assert query_result["action"] == "sql_query"
+    assert query_result["action"] == "getRecordsUsingSQL"
     assert query_result["payload"] == {
         "sql": "SELECT * FROM customers WHERE id = ?",
-        "params": [123],
+        "sqlParams": [{"name": "p1", "value": 123}],
     }
-    assert exec_result["action"] == "sql_execute"
+    assert exec_result["action"] == "runSQLStatements"
     assert exec_result["payload"] == {
-        "sql": "DELETE FROM customers WHERE id = ?",
-        "params": [123],
+        "sqlStatements": ["DELETE FROM customers WHERE id = ?"],
+        "inParams": [{"name": "p1", "value": 123}],
     }
 
 
@@ -91,10 +91,7 @@ def test_sql_adapter_paginated_query_calls_expected_action() -> None:
     client.post_action = lambda action, payload=None: {
         "action": action,
         "payload": payload,
-        "rows": [
-            {"id": 1},
-            {"id": 2},
-        ],
+        "result": {"data": [{"id": 1}, {"id": 2}], "moreRecords": False},
     }
 
     page_result = adapter.query_page(
@@ -104,12 +101,12 @@ def test_sql_adapter_paginated_query_calls_expected_action() -> None:
         page_size=250,
     )
 
-    assert page_result["action"] == "sql_query"
+    assert page_result["action"] == "getRecordsUsingSQL"
     assert page_result["payload"] == {
         "sql": "SELECT * FROM customers ORDER BY id",
-        "params": ["active"],
-        "page": 2,
-        "pageSize": 250,
+        "sqlParams": [{"name": "p1", "value": "active"}],
+        "skipRecords": 250,
+        "maxRecords": 250,
     }
     assert page_result["has_more"] is False
     assert page_result["next_page"] is None
@@ -123,11 +120,7 @@ def test_sql_adapter_paginated_query_adds_cursor_metadata() -> None:
     client.post_action = lambda action, payload=None: {
         "action": action,
         "payload": payload,
-        "rows": [
-            {"id": 1},
-            {"id": 2},
-            {"id": 3},
-        ],
+        "result": {"data": [{"id": 1}, {"id": 2}, {"id": 3}], "moreRecords": True},
     }
 
     page_result = adapter.query_page(
@@ -169,5 +162,5 @@ def test_sql_adapter_enforces_policy_before_request() -> None:
 
     result = adapter.query("SELECT * FROM customers")
 
-    assert result["action"] == "sql_query"
-    assert client.calls == [("sql_query", {"sql": "SELECT * FROM customers"})]
+    assert result["action"] == "getRecordsUsingSQL"
+    assert client.calls == [("getRecordsUsingSQL", {"sql": "SELECT * FROM customers"})]

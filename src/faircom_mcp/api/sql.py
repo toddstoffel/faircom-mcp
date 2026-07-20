@@ -21,8 +21,12 @@ class SQLAdapter:
         self._validate_statement(statement, operation="sql_query")
         payload: dict[str, Any] = {"sql": statement}
         if params is not None:
-            payload["params"] = list(params)
-        return self._client.post_action("sql_query", payload)
+            # FairCom JSON API uses named sqlParams rather than positional params.
+            payload["sqlParams"] = [
+                {"name": f"p{index + 1}", "value": value}
+                for index, value in enumerate(params)
+            ]
+        return self._client.post_action("getRecordsUsingSQL", payload)
 
     def query_page(
         self,
@@ -40,20 +44,26 @@ class SQLAdapter:
 
         payload: dict[str, Any] = {
             "sql": statement,
-            "page": page,
-            "pageSize": page_size,
+            "skipRecords": (page - 1) * page_size,
+            "maxRecords": page_size,
         }
         if params is not None:
-            payload["params"] = list(params)
-        result = self._client.post_action("sql_query", payload)
+            payload["sqlParams"] = [
+                {"name": f"p{index + 1}", "value": value}
+                for index, value in enumerate(params)
+            ]
+        result = self._client.post_action("getRecordsUsingSQL", payload)
         return self._with_pagination_metadata(result, page=page, page_size=page_size)
 
     def execute(self, statement: str, params: Sequence[Any] | None = None) -> Any:
         self._validate_statement(statement, operation="sql_execute")
-        payload: dict[str, Any] = {"sql": statement}
+        payload: dict[str, Any] = {"sqlStatements": [statement]}
         if params is not None:
-            payload["params"] = list(params)
-        return self._client.post_action("sql_execute", payload)
+            payload["inParams"] = [
+                {"name": f"p{index + 1}", "value": value}
+                for index, value in enumerate(params)
+            ]
+        return self._client.post_action("runSQLStatements", payload)
 
     def _validate_statement(self, statement: str, *, operation: str) -> None:
         if self._policy is not None:
@@ -63,8 +73,11 @@ class SQLAdapter:
         if not isinstance(result, dict):
             return result
 
-        rows = result.get("rows")
-        has_more = isinstance(rows, list) and len(rows) == page_size
+        maybe_result = result.get("result")
+        rows = maybe_result.get("data") if isinstance(maybe_result, dict) else None
+        has_more = bool(maybe_result.get("moreRecords")) if isinstance(maybe_result, dict) else False
+        if not has_more and isinstance(rows, list) and len(rows) == page_size:
+            has_more = True
 
         enriched = dict(result)
         enriched["has_more"] = has_more

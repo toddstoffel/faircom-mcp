@@ -13,11 +13,18 @@ class TableAdapter:
         payload: dict[str, str] = {}
         if name_like:
             payload["tableNameLike"] = name_like
-        return self._client.post_action("list_tables", payload or None)
+        return self._client.post_action("listTables", payload or None)
 
     def describe_table(self, table_name: str) -> Any:
-        payload = {"tableName": table_name}
-        return self._client.post_action("describe_table", payload)
+        payload = {"tableNames": [table_name]}
+        result = self._client.post_action("describeTables", payload)
+        if not isinstance(result, dict):
+            return result
+
+        data = result.get("result", {}).get("data") if isinstance(result.get("result"), dict) else None
+        if isinstance(data, list) and data:
+            return data[0]
+        return result
 
     def list_table_columns(self, table_name: str) -> dict[str, Any]:
         description = self.describe_table(table_name)
