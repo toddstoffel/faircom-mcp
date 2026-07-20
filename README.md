@@ -149,5 +149,4 @@ If a blocked group is invoked, the server returns a validation error with policy
 - `docs/testing.md`: test layers and FairCom Edge runtime validation
 
 ## Notes
-- `private_notes/` is local-only planning context and ignored by git.
 - This project uses direct FairCom JSON API integration and does not depend on FairCom CLI tools.
