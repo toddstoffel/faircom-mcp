@@ -26,8 +26,7 @@ class RuntimeMetrics:
                     for (tool, status), count in sorted(self._tool_calls.items())
                 },
                 "tool_seconds_total": {
-                    tool: round(total, 6)
-                    for tool, total in sorted(self._tool_seconds.items())
+                    tool: round(total, 6) for tool, total in sorted(self._tool_seconds.items())
                 },
             }
 

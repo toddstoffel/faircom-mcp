@@ -46,7 +46,8 @@ class JsonFormatter(logging.Formatter):
         extras = {
             key: value
             for key, value in record.__dict__.items()
-            if key not in {
+            if key
+            not in {
                 "name",
                 "msg",
                 "args",

@@ -171,4 +171,3 @@ def test_sql_adapter_enforces_policy_before_request() -> None:
 
     assert result["action"] == "sql_query"
     assert client.calls == [("sql_query", {"sql": "SELECT * FROM customers"})]
-

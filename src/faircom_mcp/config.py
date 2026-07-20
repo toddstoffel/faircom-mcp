@@ -31,11 +31,7 @@ def _parse_csv_values(raw_value: str | None) -> tuple[str, ...]:
     if not raw_value:
         return ()
 
-    values = tuple(
-        item.strip().upper()
-        for item in raw_value.split(",")
-        if item.strip()
-    )
+    values = tuple(item.strip().upper() for item in raw_value.split(",") if item.strip())
     return values
 
 

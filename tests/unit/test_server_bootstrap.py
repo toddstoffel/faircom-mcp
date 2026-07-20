@@ -261,9 +261,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert list_table_columns_calls == ["demo"]
     assert list_table_indexes_calls == ["demo"]
     assert sql_query_calls == [("select * from demo", [1, "two"])]
-    assert sql_query_page_calls == [
-        ("select * from demo order by id", ["active"], 3, 50)
-    ]
+    assert sql_query_page_calls == [("select * from demo order by id", ["active"], 3, 50)]
     assert sql_execute_calls == [("update demo set flag = 1", ["x"])]
 
 
