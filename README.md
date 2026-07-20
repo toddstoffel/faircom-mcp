@@ -6,15 +6,23 @@ Production-grade MCP server for FairCom JSON API with enterprise Linux operation
 - Phase 0-5 complete.
 - Phase 6 complete: container runtime, Linux packaging artifacts, release workflow,
   and package lifecycle validation.
-- Phase 7 started: paginated SQL query support (`sql_query_page`) for large
-    result set workflows.
+- Phase 7 in progress.
+- Delivered so far:
+    - `sql_query_page` tool for paginated SQL reads.
+    - Deterministic pagination metadata in responses: `has_more`, `next_page`.
+    - Cursor-compatibility alias: `next_cursor`.
 
 ## Development Setup
-1. Create and activate a Python 3.11+ virtual environment.
-2. Install package + dev dependencies:
+1. Install package + dev dependencies into local system/user Python:
 
 ```bash
-python -m pip install -e .[dev]
+python3 -m pip install --user -e '.[dev]'
+```
+
+2. Ensure user-level scripts are on `PATH` (needed for `faircom-mcp-server` and `cyclonedx-py`):
+
+```bash
+export PATH="$(python3 -m site --user-base)/bin:$PATH"
 ```
 
 ## Quality Commands
@@ -65,6 +73,14 @@ inputs:
     params: []
     page: 1
     page_size: 500
+```
+
+Response includes deterministic iteration metadata:
+
+```text
+has_more: <bool>
+next_page: <int|null>
+next_cursor: <int|null>
 ```
 
 ## Packaging Artifacts
