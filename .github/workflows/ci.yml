@@ -73,7 +73,7 @@ jobs:
       - name: Smoke test docker compose runtime
         run: |
           set -euo pipefail
-          docker compose up --build -d
+          FAIRCOM_API_TOKEN=dummy-token docker compose up --build -d
 
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
