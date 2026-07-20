@@ -6,6 +6,8 @@ Production-grade MCP server for FairCom JSON API with enterprise Linux operation
 - Phase 0-5 complete.
 - Phase 6 complete: container runtime, Linux packaging artifacts, release workflow,
   and package lifecycle validation.
+- Phase 7 started: paginated SQL query support (`sql_query_page`) for large
+    result set workflows.
 
 ## Development Setup
 1. Create and activate a Python 3.11+ virtual environment.
@@ -51,6 +53,18 @@ STDIO mode:
 
 ```bash
 faircom-mcp-server --transport stdio
+```
+
+## Phase 7 Capability (In Progress)
+Use paginated SQL query mode for large result sets:
+
+```text
+tool: sql_query_page
+inputs:
+    statement: "SELECT * FROM my_table ORDER BY id"
+    params: []
+    page: 1
+    page_size: 500
 ```
 
 ## Packaging Artifacts

@@ -100,6 +100,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     list_table_calls: list[str | None] = []
     describe_table_calls: list[str] = []
     sql_query_calls: list[tuple[str, list[object] | None]] = []
+    sql_query_page_calls: list[tuple[str, list[object] | None, int, int]] = []
     sql_execute_calls: list[tuple[str, list[object] | None]] = []
 
     class FakeTables:
@@ -115,6 +116,22 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
             sql_query_calls.append((statement, params))
             return {"statement": statement, "params": params}
+
+        def query_page(
+            self,
+            statement: str,
+            params: list[object] | None = None,
+            *,
+            page: int = 1,
+            page_size: int = 100,
+        ) -> dict[str, object]:
+            sql_query_page_calls.append((statement, params, page, page_size))
+            return {
+                "statement": statement,
+                "params": params,
+                "page": page,
+                "page_size": page_size,
+            }
 
         def execute(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
             sql_execute_calls.append((statement, params))
@@ -140,7 +157,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert isinstance(server, fake_class)
     assert captured == [config]
     assert [path for path, _handler in server.routes] == ["/healthz", "/readyz"]
-    assert list(server.tools) == ["list_tables", "describe_table", "sql_query", "sql_execute"]
+    assert list(server.tools) == [
+        "list_tables",
+        "describe_table",
+        "sql_query",
+        "sql_query_page",
+        "sql_execute",
+    ]
 
     app = server.http_app()
 
@@ -165,6 +188,17 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "statement": "select * from demo",
         "params": [1, "two"],
     }
+    assert server.tools["sql_query_page"](
+        statement="select * from demo order by id",
+        params=["active"],
+        page=3,
+        page_size=50,
+    ) == {
+        "statement": "select * from demo order by id",
+        "params": ["active"],
+        "page": 3,
+        "page_size": 50,
+    }
     try:
         server.tools["sql_execute"](statement="update demo set flag = 1")
     except ValidationFailure as exc:
@@ -183,6 +217,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert list_table_calls == [None, "foo"]
     assert describe_table_calls == ["demo"]
     assert sql_query_calls == [("select * from demo", [1, "two"])]
+    assert sql_query_page_calls == [
+        ("select * from demo order by id", ["active"], 3, 50)
+    ]
     assert sql_execute_calls == [("update demo set flag = 1", ["x"])]
 
 

@@ -4,6 +4,7 @@ from typing import Any, cast
 
 from faircom_mcp.api.sql import SQLAdapter
 from faircom_mcp.api.tables import TableAdapter
+from faircom_mcp.errors import ValidationFailure
 from faircom_mcp.security import SqlStatementPolicy
 
 
@@ -54,6 +55,45 @@ def test_sql_adapter_calls_expected_actions() -> None:
         "sql": "DELETE FROM customers WHERE id = ?",
         "params": [123],
     }
+
+
+def test_sql_adapter_paginated_query_calls_expected_action() -> None:
+    client = StubClient()
+    adapter = SQLAdapter(cast(Any, client))
+
+    page_result = adapter.query_page(
+        "SELECT * FROM customers ORDER BY id",
+        ["active"],
+        page=2,
+        page_size=250,
+    )
+
+    assert page_result["action"] == "sql_query"
+    assert page_result["payload"] == {
+        "sql": "SELECT * FROM customers ORDER BY id",
+        "params": ["active"],
+        "page": 2,
+        "pageSize": 250,
+    }
+
+
+def test_sql_adapter_paginated_query_validates_paging_inputs() -> None:
+    client = StubClient()
+    adapter = SQLAdapter(cast(Any, client))
+
+    try:
+        adapter.query_page("SELECT 1", page=0)
+    except ValidationFailure as exc:
+        assert exc.details == {"page": 0}
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected page validation failure")
+
+    try:
+        adapter.query_page("SELECT 1", page_size=0)
+    except ValidationFailure as exc:
+        assert exc.details == {"page_size": 0}
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected page_size validation failure")
 
 
 def test_sql_adapter_enforces_policy_before_request() -> None:

@@ -53,6 +53,20 @@ def create_server(
     def sql_query(statement: str, params: list[object] | None = None) -> object:
         return sql.query(statement, params=params)
 
+    @server.tool(name="sql_query_page")
+    def sql_query_page(
+        statement: str,
+        params: list[object] | None = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> object:
+        return sql.query_page(
+            statement,
+            params=params,
+            page=page,
+            page_size=page_size,
+        )
+
     @server.tool(name="sql_execute")
     def sql_execute(
         statement: str,
