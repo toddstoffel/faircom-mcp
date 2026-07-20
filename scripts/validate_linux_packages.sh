@@ -39,8 +39,8 @@ docker run --rm -v "${ROOT_DIR}/dist/packages:/packages:ro" ubuntu:24.04 bash -l
   ! dpkg -s faircom-mcp 2>/dev/null | grep -q "^Status: install ok installed"
 '
 
-echo "Validating RPM install/uninstall lifecycle in rockylinux:9 ..."
-docker run --rm -v "${ROOT_DIR}/dist/packages:/packages:ro" rockylinux:9 bash -lc '
+echo "Validating RPM install/uninstall lifecycle in fedora:41 ..."
+docker run --rm -v "${ROOT_DIR}/dist/packages:/packages:ro" fedora:41 bash -lc '
   set -euo pipefail
   dnf -y install ca-certificates python3 python3-pip systemd shadow-utils logrotate
   dnf -y install /packages/*.rpm --nogpgcheck

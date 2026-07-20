@@ -152,3 +152,26 @@ If a blocked group is invoked, the server returns a validation error with policy
 
 ## Notes
 - This project uses direct FairCom JSON API integration and does not depend on FairCom CLI tools.
+
+## Container Images From Linux Packages
+The Docker build installs the server from the same Linux packages customers use.
+
+Build Debian-based runtime image (installs generated `.deb` package):
+
+```bash
+docker build --target runtime-deb -t faircom-mcp:deb .
+```
+
+Build RPM-based runtime image (installs generated `.rpm` package):
+
+```bash
+docker build --target runtime-rpm -t faircom-mcp:rpm .
+```
+
+Default Docker target is Debian runtime:
+
+```bash
+docker build -t faircom-mcp:local .
+```
+
+Both runtime targets build packages in the `package-builder` stage and install them into the final image so container behavior matches package-installed customer deployments.

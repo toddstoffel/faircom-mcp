@@ -13,7 +13,7 @@ This matrix defines the currently validated Linux targets for FairCom MCP packag
 | Distribution | Version | Package Type | Architecture | Validation Mode | Status |
 | --- | --- | --- | --- | --- | --- |
 | Ubuntu | 24.04 | DEB | amd64 | CI containerized lifecycle validation | Validated |
-| Rocky Linux | 9 | RPM | amd64 | CI containerized lifecycle validation | Validated |
+| Fedora | 41 | RPM | amd64 | CI containerized lifecycle validation | Validated |
 
 ## Validation Command
 Run after package build artifacts are present under `dist/packages`:
