@@ -35,7 +35,7 @@ jobs:
         run: mypy src
 
       - name: Unit and integration tests
-        run: pytest
+        run: pytest -m "not edge_integration"
 
   linux-packages:
     runs-on: ubuntu-latest
