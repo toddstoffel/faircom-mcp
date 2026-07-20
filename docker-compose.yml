@@ -6,13 +6,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      FAIRCOM_API_BASE_URL: ${FAIRCOM_API_BASE_URL:-http://host.docker.internal:8080}
+      FAIRCOM_API_BASE_URL: ${FAIRCOM_API_BASE_URL:-http://127.0.0.1:8080}
       FAIRCOM_API_TOKEN: ${FAIRCOM_API_TOKEN:-}
       FAIRCOM_HTTP_HOST: 0.0.0.0
       FAIRCOM_HTTP_PORT: 8000
       FAIRCOM_TLS_VERIFY: ${FAIRCOM_TLS_VERIFY:-true}
       FAIRCOM_SQL_ALLOWLIST: ${FAIRCOM_SQL_ALLOWLIST:-}
       FAIRCOM_SQL_DENYLIST: ${FAIRCOM_SQL_DENYLIST:-}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     command: ["--transport", "http"]

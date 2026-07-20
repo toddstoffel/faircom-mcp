@@ -5,6 +5,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 IN_DOCKER_FPM_BUILD="${IN_DOCKER_FPM_BUILD:-0}"
+PACKAGE_BUILD_MODE="${PACKAGE_BUILD_MODE:-auto}"
+PACKAGE_BUILDER_IMAGE="${PACKAGE_BUILDER_IMAGE:-debian:stable-slim}"
+
+case "${PACKAGE_BUILD_MODE}" in
+  auto|native|container)
+    ;;
+  *)
+    echo "PACKAGE_BUILD_MODE must be one of: auto, native, container" >&2
+    exit 1
+    ;;
+esac
 
 if ! command -v fpm >/dev/null 2>&1; then
   echo "fpm is required to build DEB/RPM packages" >&2
@@ -33,25 +44,42 @@ print(data['project']['version'])
 PY
 )}"
 
-if [[ "$(uname -s)" == "Darwin" && "${IN_DOCKER_FPM_BUILD}" != "1" ]]; then
+if [[ "$(uname -s)" != "Linux" && "${IN_DOCKER_FPM_BUILD}" != "1" ]]; then
+  if [[ "${PACKAGE_BUILD_MODE}" == "native" ]]; then
+    echo "PACKAGE_BUILD_MODE=native selected on non-Linux host; continuing with native tooling" >&2
+  else
+    PACKAGE_BUILD_MODE="container"
+  fi
+fi
+
+if [[ "${PACKAGE_BUILD_MODE}" == "auto" ]]; then
+  if command -v docker >/dev/null 2>&1; then
+    PACKAGE_BUILD_MODE="container"
+  else
+    PACKAGE_BUILD_MODE="native"
+  fi
+fi
+
+if [[ "${PACKAGE_BUILD_MODE}" == "container" && "${IN_DOCKER_FPM_BUILD}" != "1" ]]; then
   if ! command -v docker >/dev/null 2>&1; then
-    echo "docker is required to build valid Linux DEB/RPM packages from macOS hosts" >&2
+    echo "docker is required when PACKAGE_BUILD_MODE=container" >&2
     exit 1
   fi
 
-  echo "Detected macOS host; building Linux packages in ubuntu:24.04 container ..."
+  echo "Building Linux packages in container image ${PACKAGE_BUILDER_IMAGE} ..."
   docker run --rm \
     -e DEBIAN_FRONTEND=noninteractive \
     -e IN_DOCKER_FPM_BUILD=1 \
+    -e PACKAGE_BUILD_MODE=native \
     -e VERSION="${VERSION}" \
     -e OUTPUT_DIR="/work/dist/packages" \
     -e BUILD_DIR="/work/build/packages" \
     -v "${ROOT_DIR}:/work" \
     -w /work \
-    ubuntu:24.04 bash -lc '
+    "${PACKAGE_BUILDER_IMAGE}" bash -lc '
       set -euo pipefail
       apt-get update >/dev/null
-      apt-get install -y ca-certificates python3 python3-pip ruby ruby-dev build-essential rpm >/dev/null
+      apt-get install -y ca-certificates python3 python3-pip ruby ruby-dev build-essential rpm bash >/dev/null
       gem install --no-document fpm >/dev/null
       bash scripts/build_linux_packages.sh "${VERSION}"
     '

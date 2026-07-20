@@ -28,7 +28,7 @@ container-build:
 
 container-run:
 	docker run --rm -p 8000:8000 \
-		-e FAIRCOM_API_BASE_URL=$${FAIRCOM_API_BASE_URL:-http://host.docker.internal:8080} \
+		-e FAIRCOM_API_BASE_URL=$${FAIRCOM_API_BASE_URL:-http://127.0.0.1:8080} \
 		-e FAIRCOM_API_TOKEN=$${FAIRCOM_API_TOKEN:-} \
 		-e FAIRCOM_HTTP_HOST=0.0.0.0 \
 		-e FAIRCOM_HTTP_PORT=8000 \

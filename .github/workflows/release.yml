@@ -48,6 +48,8 @@ jobs:
           sudo gem install --no-document fpm
 
       - name: Build DEB and RPM packages
+        env:
+          PACKAGE_BUILD_MODE: native
         run: make package-build
 
       - name: Inspect package metadata

@@ -37,6 +37,59 @@ jobs:
       - name: Unit and integration tests
         run: pytest -m "not edge_integration"
 
+  container-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build container image
+        run: docker build -t faircom-mcp:ci .
+
+      - name: Smoke test container runtime
+        run: |
+          set -euo pipefail
+          docker run -d --name faircom-mcp-ci -p 8000:8000 \
+            -e FAIRCOM_API_BASE_URL=http://127.0.0.1:8080 \
+            -e FAIRCOM_API_TOKEN=dummy-token \
+            faircom-mcp:ci --transport http
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Container health endpoint did not become ready in time" >&2
+          docker logs faircom-mcp-ci || true
+          exit 1
+
+      - name: Cleanup container runtime smoke test
+        if: always()
+        run: docker rm -f faircom-mcp-ci || true
+
+      - name: Smoke test docker compose runtime
+        run: |
+          set -euo pipefail
+          docker compose up --build -d
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Compose health endpoint did not become ready in time" >&2
+          docker compose logs || true
+          exit 1
+
+      - name: Cleanup docker compose smoke test
+        if: always()
+        run: docker compose down -v || true
+
   linux-packages:
     runs-on: ubuntu-latest
 
@@ -61,6 +114,8 @@ jobs:
           sudo gem install --no-document fpm
 
       - name: Build Linux packages
+        env:
+          PACKAGE_BUILD_MODE: native
         run: make package-build
 
       - name: Inspect package metadata
