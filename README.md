@@ -11,15 +11,15 @@ Connect AI assistants and LLMs to FairCom databases with production-grade safety
 ┌────────────────────▼────────────────────────────────────────┐
 │  FairCom MCP Server                                         │
 │  • Session management                                       │
-│  • Write safety enforcement (confirm_write=true)           │
+│  • Write safety enforcement (confirm_write=true)            │
 │  • Tool exposure control                                    │
-│  • Rate limiting, observability                            │
+│  • Rate limiting, observability                             │
 └────────────────────┬────────────────────────────────────────┘
                      │ FairCom JSON API
                      │ (HTTP REST)
 ┌────────────────────▼────────────────────────────────────────┐
 │  FairCom Database                                           │
-│  (Edge, DB, RTG, ISAM, MQ)                                 │
+│  (Edge, DB, RTG, ISAM, MQ)                                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
