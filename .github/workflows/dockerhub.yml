@@ -53,3 +53,13 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Update Docker Hub repo description and README
+        if: github.event_name != 'pull_request'
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: toddstoffelfaircom
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: faircomteam/faircom-mcp
+          short-description: Connect AI assistants and LLMs to FairCom databases with production-grade safety controls.
+          readme-filepath: ./README.md
