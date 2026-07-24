@@ -104,6 +104,12 @@ docker run -d --name faircom-mcp \
   faircomteam/faircom-mcp:latest --transport http
 ```
 
+If FairCom is running on your local host machine, use:
+
+```bash
+-e FAIRCOM_API_BASE_URL=http://host.docker.internal:8080
+```
+
 ### Option 2: Linux Package (Production)
 
 **Debian/Ubuntu:**
@@ -140,6 +146,44 @@ curl -i -X POST http://127.0.0.1:8000/mcp \
     }
   }' | head -20
 ```
+
+## Docker Hub Usage
+
+The official image repository is:
+
+- `faircomteam/faircom-mcp`
+
+Recommended tag usage:
+
+- `latest`: Most recent published image for standard users
+- `main`: Image published from main-branch-targeted workflow runs (for example, manual dispatch)
+- `v*` tags (for example `vX.Y.Z`): Immutable release tags for production pinning
+
+Pull examples:
+
+```bash
+# Default current image
+docker pull faircomteam/faircom-mcp:latest
+
+# Pin to an immutable release for production
+docker pull faircomteam/faircom-mcp:vX.Y.Z
+```
+
+Run example with explicit release pin:
+
+```bash
+docker run -d --name faircom-mcp \
+  -p 8000:8000 \
+  -e FAIRCOM_API_BASE_URL=http://faircom-host:8080 \
+  -e FAIRCOM_API_USERNAME=ADMIN \
+  -e FAIRCOM_API_PASSWORD=ADMIN \
+  faircomteam/faircom-mcp:vX.Y.Z --transport http
+```
+
+Notes:
+
+- Prefer release tag pins (`v*`) in production to avoid unexpected image drift.
+- Use `latest` for quick evaluation and local experimentation.
 
 ## Tutorial: Query Your First Table
 
