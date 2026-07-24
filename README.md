@@ -1,5 +1,8 @@
 # FairCom MCP Server
 
+> [!IMPORTANT]
+> Developers and maintainers: use [BUILD.md](BUILD.md) for build, packaging, and release instructions. This README is product and usage focused.
+
 Connect AI assistants and LLMs to FairCom databases with production-grade safety controls, Linux packaging, and operational discipline.
 
 ```
