@@ -98,7 +98,7 @@ docker run -d --name faircom-mcp \
   -e FAIRCOM_API_BASE_URL=http://faircom-host:8080 \
   -e FAIRCOM_API_USERNAME=ADMIN \
   -e FAIRCOM_API_PASSWORD=ADMIN \
-  toddstoffel/faircom-mcp:latest --transport http
+  faircomteam/faircom-mcp:latest --transport http
 ```
 
 ### Option 2: Linux Package (Production)
