@@ -21,6 +21,28 @@ Ensure user-level scripts are on `PATH`:
 export PATH="$(python3 -m site --user-base)/bin:$PATH"
 ```
 
+## Script Separation: Local vs Publish
+Local build/test scripts are for developer verification only and do not publish externally:
+
+- `scripts/build_linux_packages.sh`
+- `scripts/validate_linux_packages.sh`
+- `scripts/test_with_edge.sh`
+- `scripts/generate_release_integrity.sh`
+
+Commercial publishing is handled by a dedicated script:
+
+- `scripts/publish_release.sh`
+
+This script creates and pushes a `v*` tag, then triggers:
+
+- GitHub `Release` workflow to publish release assets
+- GitHub `Docker Hub` workflow to publish the container image
+
+Docker Hub publish policy:
+
+- Commercial image publishing is tag-driven (`v*`) or manual (`workflow_dispatch`)
+- Regular branch pushes do not publish release images
+
 ## Quality Gates
 ```bash
 make format
@@ -201,12 +223,27 @@ Important:
 After validating changes on `main`:
 
 1. Ensure local branch is current.
-2. Create a new semantic version tag.
-3. Push the tag to origin.
-4. Watch the Release workflow complete.
-5. Verify assets on the GitHub Releases page.
+2. Run the publish script with a new semantic version tag.
+3. Verify the workflows complete.
+4. Verify assets on GitHub Releases and image tags on Docker Hub.
 
-Example:
+Recommended:
+
+```bash
+scripts/publish_release.sh v0.1.3
+```
+
+Script options:
+
+```bash
+# Trigger publish but do not wait for workflow completion
+scripts/publish_release.sh v0.1.3 --no-wait
+
+# Allow local uncommitted changes (advanced; not recommended)
+scripts/publish_release.sh v0.1.3 --allow-dirty
+```
+
+Manual fallback (equivalent trigger):
 
 ```bash
 git checkout main

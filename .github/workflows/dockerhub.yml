@@ -2,8 +2,6 @@ name: Docker Hub
 
 on:
   push:
-    branches:
-      - "**"
     tags:
       - "v*"
   pull_request:
