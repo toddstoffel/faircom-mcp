@@ -8,9 +8,7 @@ URL:            https://faircom.com/
 BuildArch:      noarch
 
 Requires:       python3
-Requires:       python3-pip
 Requires:       ca-certificates
-Requires:       systemd
 
 %description
 Production-grade MCP server for the FairCom JSON API.

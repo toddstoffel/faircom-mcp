@@ -64,33 +64,26 @@ RUN APP_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n1
     && PACKAGE_BUILD_MODE=native bash scripts/build_linux_packages.sh "$APP_VERSION"
 
 
-FROM debian:stable-slim AS runtime-deb
+FROM python:3.13-alpine AS runtime-deb
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
     FAIRCOM_HTTP_HOST=0.0.0.0
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       ca-certificates \
-       python3 \
-       python3-pip \
-       systemd \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
 
-COPY --from=package-builder /app/dist/packages/faircom-mcp_*_all.deb /tmp/faircom-mcp.deb
+COPY pyproject.toml README.md ./
+COPY src ./src
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends /tmp/faircom-mcp.deb \
-    && rm -f /tmp/faircom-mcp.deb \
-    && rm -rf /var/lib/apt/lists/* \
-    && if ! id faircom-mcp >/dev/null 2>&1; then useradd --system --home-dir /var/lib/faircom-mcp --create-home --shell /usr/sbin/nologin faircom-mcp; fi \
-    && mkdir -p /var/log/faircom-mcp /run/faircom-mcp \
-    && chown -R faircom-mcp:faircom-mcp /var/lib/faircom-mcp /var/log/faircom-mcp /run/faircom-mcp
+RUN apk add --no-cache ca-certificates \
+    && python -m pip install --no-cache-dir . \
+    && mkdir -p /var/lib/faircom-mcp /var/log/faircom-mcp /run/faircom-mcp \
+    && chown -R 10001:10001 /var/lib/faircom-mcp /var/log/faircom-mcp /run/faircom-mcp
 
 EXPOSE 8000
 
-USER faircom-mcp
+USER 10001:10001
 
 ENTRYPOINT ["faircom-mcp-server"]
 CMD ["--transport", "http"]

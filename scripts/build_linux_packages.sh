@@ -137,9 +137,7 @@ COMMON_ARGS=(
   --force \
   --package "${OUTPUT_DIR}/faircom-mcp_${VERSION}_all.deb" \
   --depends python3 \
-  --depends python3-pip \
   --depends ca-certificates \
-  --depends systemd \
   --config-files /etc/faircom-mcp/faircom-mcp.env \
   --config-files /etc/logrotate.d/faircom-mcp \
   --after-install packaging/deb/postinst \
@@ -152,9 +150,7 @@ COMMON_ARGS=(
   --force \
   --package "${OUTPUT_DIR}/faircom-mcp-${VERSION}-1.noarch.rpm" \
   --depends python3 \
-  --depends python3-pip \
   --depends ca-certificates \
-  --depends systemd \
   --config-files /etc/faircom-mcp/faircom-mcp.env \
   --config-files /etc/logrotate.d/faircom-mcp \
   --after-install packaging/deb/postinst \
