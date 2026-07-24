@@ -3,7 +3,7 @@
 > [!IMPORTANT]
 > Developers and maintainers: use [BUILD.md](BUILD.md) for build, packaging, and release instructions. This README is product and usage focused.
 
-Connect AI assistants and LLMs to FairCom databases with production-grade safety controls, Linux packaging, and operational discipline.
+Connect AI assistants and LLMs to FairCom databases with explicit write controls, Linux packaging, and operational tooling.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -28,16 +28,16 @@ Connect AI assistants and LLMs to FairCom databases with production-grade safety
 
 **Why FairCom MCP?**
 
-- ✅ **Open source** – Apache 2.0, transparent, community-driven
-- ✅ **Production ready** – systemd service, log rotation, health checks
-- ✅ **Safe by default** – Explicit write confirmation, tool allowlisting
-- ✅ **Portfolio-wide** – Works with Edge, DB, RTG, ISAM, MQ
-- ✅ **AI-native** – Purpose-built for Claude, Copilot, local LLMs
+- **Open source**: Apache 2.0
+- **Operationally ready**: systemd service, log rotation, health checks
+- **Safe by default**: explicit write confirmation and tool allowlisting
+- **Broad compatibility**: works with Edge, DB, RTG, ISAM, and MQ
+- **MCP-focused**: intended for Claude, Copilot, and local LLM workflows
 
 ## Use Cases
 
 ### 1. Business Intelligence & Reporting
-**Empower business users to ask natural language questions about FairCom data.**
+**Let users ask natural-language questions about FairCom data.**
 
 *Example: "What were our top 5 products by revenue last quarter?"*
 
