@@ -40,7 +40,8 @@ This script creates and pushes a `v*` tag, then triggers:
 
 Docker Hub publish policy:
 
-- Commercial image publishing is tag-driven (`v*`) or manual (`workflow_dispatch`)
+- Commercial image publishing is release-tag-driven only (`v*`)
+- `latest` and matching `v*` tags are published together from the same release event
 - Regular branch pushes do not publish release images
 
 ## Quality Gates

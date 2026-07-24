@@ -155,8 +155,7 @@ The official image repository is:
 
 Recommended tag usage:
 
-- `latest`: Most recent published image for standard users
-- `main`: Image published from main-branch-targeted workflow runs (for example, manual dispatch)
+- `latest`: Recommended default tag for standard users
 - `v*` tags (for example `vX.Y.Z`): Immutable release tags for production pinning
 
 Pull examples:
@@ -169,7 +168,7 @@ docker pull faircomteam/faircom-mcp:latest
 docker pull faircomteam/faircom-mcp:vX.Y.Z
 ```
 
-Run example with explicit release pin:
+Run example (recommended default):
 
 ```bash
 docker run -d --name faircom-mcp \
@@ -177,13 +176,14 @@ docker run -d --name faircom-mcp \
   -e FAIRCOM_API_BASE_URL=http://faircom-host:8080 \
   -e FAIRCOM_API_USERNAME=ADMIN \
   -e FAIRCOM_API_PASSWORD=ADMIN \
-  faircomteam/faircom-mcp:vX.Y.Z --transport http
+  faircomteam/faircom-mcp:latest --transport http
 ```
 
 Notes:
 
-- Prefer release tag pins (`v*`) in production to avoid unexpected image drift.
-- Use `latest` for quick evaluation and local experimentation.
+- Use `latest` for normal usage and quick evaluation.
+- Use release tag pins (`v*`) only when you need immutable version locking.
+- `latest` and `v*` tags are published together from the same release tag workflow.
 
 ## Tutorial: Query Your First Table
 
