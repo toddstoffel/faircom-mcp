@@ -5,6 +5,8 @@
 
 Connect AI assistants and LLMs to FairCom databases with explicit write controls, Linux packaging, and operational tooling.
 
+> Current release: v0.1.5. The install examples and release automation in this repository are aligned to this version.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Your AI Assistant (Claude, Copilot, etc.)                  │
@@ -33,6 +35,34 @@ Connect AI assistants and LLMs to FairCom databases with explicit write controls
 - **Safe by default**: explicit write confirmation and tool allowlisting
 - **Broad compatibility**: works with Edge, DB, RTG, ISAM, and MQ
 - **MCP-focused**: intended for Claude, Copilot, and local LLM workflows
+
+## Safe Write Workflow
+
+Use the write controls to make destructive operations predictable and reviewable.
+
+1. Start with a read-only query to confirm the target data.
+2. Preview writes with `dry_run=True` before applying anything.
+3. Review the preview output, especially the scoped `WHERE` clause and row impact.
+4. Apply the change only with `confirm_write=True` and `dry_run=False`.
+5. Check the audit trail and metrics endpoints after execution.
+
+```python
+# Preview a deletion without changing data
+preview = faircom_mcp.sql_execute(
+    "DELETE FROM staging_orders WHERE created_at < '2026-01-01'",
+    dry_run=True,
+)
+
+if preview["would_succeed"]:
+    # Only after review, run the real write
+    faircom_mcp.sql_execute(
+        "DELETE FROM staging_orders WHERE created_at < '2026-01-01'",
+        confirm_write=True,
+        dry_run=False,
+    )
+```
+
+For production use, prefer an `operator` or `admin` policy bundle and keep dry-runs in the loop for high-risk statements such as `DELETE`, `UPDATE`, or `DROP`.
 
 ## Use Cases
 
@@ -114,13 +144,13 @@ If FairCom is running on your local host machine, use:
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt-get install -y ./faircom-mcp_0.1.3_all.deb
+sudo apt-get install -y ./faircom-mcp_0.1.5_all.deb
 sudo systemctl enable --now faircom-mcp
 ```
 
 **RHEL/Rocky/AlmaLinux:**
 ```bash
-sudo dnf install -y ./faircom-mcp-0.1.3-1.noarch.rpm
+sudo dnf install -y ./faircom-mcp-0.1.5-1.noarch.rpm
 sudo systemctl enable --now faircom-mcp
 ```
 
@@ -311,6 +341,7 @@ FAIRCOM_HTTP_PORT=8000
 FAIRCOM_TLS_VERIFY=true              # Set to false for self-signed certs
 
 # Optional: Safety controls
+FAIRCOM_POLICY_PRESET=default   # default, read_only, analyst, operator, admin
 FAIRCOM_TOOL_GROUP_ALLOWLIST=metadata,query,write,admin,diagnostics
 FAIRCOM_SQL_ALLOWLIST=SELECT,INSERT,UPDATE,DELETE
 FAIRCOM_SQL_DENYLIST=DROP,TRUNCATE,ALTER
@@ -326,8 +357,9 @@ FAIRCOM_SQL_DENYLIST=DROP,TRUNCATE,ALTER
 | `list_table_indexes(table_name)` | Index details | Read-only |
 | `sql_query(statement, params?)` | Execute SELECT (read-only) | Read-only |
 | `sql_query_page(statement, params?, page, page_size)` | Paginated SELECT | Read-only |
-| `sql_execute(statement, params?, confirm_write)` | INSERT/UPDATE/DELETE (requires `confirm_write=true`) | Write |
+| `sql_execute(statement, params?, confirm_write, dry_run)` | INSERT/UPDATE/DELETE (requires `confirm_write=true` unless `dry_run=true`) | Write |
 | `runtime_status()` | Health, version, diagnostics | Read-only |
+| `capabilities_summary()` | Discover enabled tool groups and policy preset | Read-only |
 
 ## Observability & Operations
 

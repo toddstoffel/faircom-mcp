@@ -3,6 +3,8 @@
 This document is for maintainers who build, test, and package FairCom MCP.
 End-user install and configuration instructions are in `README.md`.
 
+> Current maintainer release target: v0.1.5. Update the package metadata and release docs together before tagging a new release.
+
 ## Maintainer Prerequisites
 - Python 3.11+
 - Docker (required for reproducible package builds on any host)
@@ -24,14 +26,14 @@ export PATH="$(python3 -m site --user-base)/bin:$PATH"
 ## Script Separation: Local vs Publish
 Local build/test scripts are for developer verification only and do not publish externally:
 
-- `scripts/build_linux_packages.sh`
-- `scripts/validate_linux_packages.sh`
-- `scripts/test_with_edge.sh`
-- `scripts/generate_release_integrity.sh`
+- `devtools/build_linux_packages.sh`
+- `devtools/validate_linux_packages.sh`
+- `tests/integration/test_with_edge.sh`
+- `devtools/generate_release_integrity.sh`
 
 Commercial publishing is handled by a dedicated script:
 
-- `scripts/publish_release.sh`
+- `devtools/publish_release.sh`
 
 This script creates and pushes a `v*` tag, then triggers:
 
@@ -231,17 +233,17 @@ After validating changes on `main`:
 Recommended:
 
 ```bash
-scripts/publish_release.sh v0.1.3
+devtools/publish_release.sh v0.1.5
 ```
 
 Script options:
 
 ```bash
 # Trigger publish but do not wait for workflow completion
-scripts/publish_release.sh v0.1.3 --no-wait
+devtools/publish_release.sh v0.1.5 --no-wait
 
 # Allow local uncommitted changes (advanced; not recommended)
-scripts/publish_release.sh v0.1.3 --allow-dirty
+devtools/publish_release.sh v0.1.5 --allow-dirty
 ```
 
 Manual fallback (equivalent trigger):
@@ -249,8 +251,8 @@ Manual fallback (equivalent trigger):
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.5
+git push origin v0.1.5
 ```
 
 ## Troubleshooting CI/CD Visibility

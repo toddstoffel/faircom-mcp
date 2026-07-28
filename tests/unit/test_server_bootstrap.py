@@ -135,6 +135,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             *,
             page: int = 1,
             page_size: int = 100,
+            continuation_token: str | None = None,
+            order_by: str | None = None,
         ) -> dict[str, object]:
             sql_query_page_calls.append((statement, params, page, page_size))
             return {
@@ -142,10 +144,27 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
                 "params": params,
                 "page": page,
                 "page_size": page_size,
+                "continuation_token": continuation_token,
+                "order_by": order_by,
             }
 
-        def execute(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
+        def execute(
+            self,
+            statement: str,
+            params: list[object] | None = None,
+            *,
+            dry_run: bool = False,
+        ) -> dict[str, object]:
             sql_execute_calls.append((statement, params))
+            if dry_run:
+                return {
+                    "dry_run": True,
+                    "statement": statement,
+                    "params": params,
+                    "preview": "Write statement would execute",
+                    "preview_details": {"target_table": "demo", "operation": "DELETE", "scoped_by_where": True, "row_estimate": "unknown"},
+                    "sample_results": {"before": [{"id": 1}], "after": []},
+                }
             return {"statement": statement, "params": params}
 
     class FakeClient:
@@ -182,6 +201,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "sql_query",
         "sql_query_page",
         "runtime_status",
+        "capabilities_summary",
+        "observability_metrics",
+        "observability_audit",
+        "observability_health",
         "sql_execute",
     ]
 
@@ -230,12 +253,37 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "params": ["active"],
         "page": 3,
         "page_size": 50,
+        "continuation_token": None,
+        "order_by": None,
     }
     assert server.tools["runtime_status"]() == {
         "service": "faircom-mcp",
         "tool_group_allowlist": ["metadata", "query", "write", "admin", "diagnostics"],
         "metrics_enabled": True,
         "tracing_enabled": False,
+    }
+    capabilities = server.tools["capabilities_summary"]()
+    assert capabilities["service"]["name"] == "faircom-mcp"
+    assert capabilities["service"]["version"] == "0.1.5"
+    assert capabilities["security"]["default_policy"] == "default"
+    assert capabilities["security"]["read_write_enabled"] is True
+    assert capabilities["security"]["diagnostics_enabled"] is False
+    assert capabilities["transport_modes"][0]["name"] == "http"
+    assert any(tool["name"] == "sql_execute" and tool["risk_level"] == "critical" for tool in capabilities["tools"])
+    assert any(tool["name"] == "sql_query_page" and tool["idempotent"] is True for tool in capabilities["tools"])
+    metrics_payload = server.tools["observability_metrics"]()
+    assert metrics_payload["service"] == "faircom-mcp"
+    assert isinstance(metrics_payload["tool_calls"], dict)
+    assert isinstance(metrics_payload["tool_seconds_total"], dict)
+    assert server.tools["observability_audit"]() == {"service": "faircom-mcp", "events": []}
+    assert server.tools["observability_health"]() == {
+        "service": "faircom-mcp",
+        "status": "ok",
+        "details": {
+            "metrics_enabled": True,
+            "tracing_enabled": False,
+            "diagnostics_enabled": False,
+        },
     }
     try:
         server.tools["sql_execute"](statement="update demo set flag = 1")
@@ -252,6 +300,23 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "statement": "update demo set flag = 1",
         "params": ["x"],
     }
+    assert server.tools["sql_execute"](
+        statement="delete from demo where id = 1",
+        params=["x"],
+        dry_run=True,
+    ) == {
+        "dry_run": True,
+        "statement": "delete from demo where id = 1",
+        "params": ["x"],
+        "preview": "Write statement would execute",
+        "preview_details": {
+            "target_table": "demo",
+            "operation": "DELETE",
+            "scoped_by_where": True,
+            "row_estimate": "unknown",
+        },
+        "sample_results": {"before": [{"id": 1}], "after": []},
+    }
     metrics_response = _get("/metrics", app)
     assert metrics_response.status_code == 200
     assert "faircom_mcp_tool_calls_total" in metrics_response.text
@@ -262,7 +327,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert list_table_indexes_calls == ["demo"]
     assert sql_query_calls == [("select * from demo", [1, "two"])]
     assert sql_query_page_calls == [("select * from demo order by id", ["active"], 3, 50)]
-    assert sql_execute_calls == [("update demo set flag = 1", ["x"])]
+    assert sql_execute_calls == [
+        ("update demo set flag = 1", ["x"]),
+        ("delete from demo where id = 1", ["x"]),
+    ]
 
 
 def test_create_http_app_honors_transport_and_readiness(monkeypatch: object) -> None:
@@ -312,8 +380,17 @@ def test_create_server_enforces_tool_group_policy(monkeypatch: object) -> None:
             *,
             page: int = 1,
             page_size: int = 100,
+            continuation_token: str | None = None,
+            order_by: str | None = None,
         ) -> dict[str, object]:
-            return {"statement": statement, "params": params, "page": page, "page_size": page_size}
+            return {
+                "statement": statement,
+                "params": params,
+                "page": page,
+                "page_size": page_size,
+                "continuation_token": continuation_token,
+                "order_by": order_by,
+            }
 
         def execute(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
             return {"statement": statement, "params": params}
@@ -364,8 +441,17 @@ def test_create_server_diagnostics_endpoints_require_token(monkeypatch: object) 
             *,
             page: int = 1,
             page_size: int = 100,
+            continuation_token: str | None = None,
+            order_by: str | None = None,
         ) -> dict[str, object]:
-            return {"statement": statement, "params": params, "page": page, "page_size": page_size}
+            return {
+                "statement": statement,
+                "params": params,
+                "page": page,
+                "page_size": page_size,
+                "continuation_token": continuation_token,
+                "order_by": order_by,
+            }
 
         def execute(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
             return {"statement": statement, "params": params}

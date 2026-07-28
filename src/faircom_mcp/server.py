@@ -17,7 +17,7 @@ from faircom_mcp.api.sql import SQLAdapter
 from faircom_mcp.api.tables import TableAdapter
 from faircom_mcp.config import AppConfig, load_config
 from faircom_mcp.errors import ValidationFailure
-from faircom_mcp.observability import RuntimeMetrics, build_tracer, maybe_span
+from faircom_mcp.observability import AuditLog, RuntimeMetrics, build_tracer, maybe_span
 
 
 def create_server(
@@ -32,13 +32,18 @@ def create_server(
     sql = SQLAdapter(client, policy=resolved_config.security.to_sql_policy())
     tool_group_policy = resolved_config.security.to_tool_group_policy()
     metrics = RuntimeMetrics()
+    audit_log = AuditLog()
     tracer = build_tracer(enabled=resolved_config.observability.enable_tracing)
     logger = logging.getLogger("faircom_mcp")
 
     server = FastMCP("faircom-mcp")
 
     def _run_tool(tool_name: str, group: str, action: Callable[[], object]) -> object:
-        tool_group_policy.validate(group)
+        try:
+            tool_group_policy.validate(group)
+        except Exception as exc:
+            audit_log.record(event_type="policy_denial", details={"tool": tool_name, "group": group})
+            raise
         started = time.perf_counter()
         try:
             with maybe_span(
@@ -200,6 +205,8 @@ def create_server(
         params: list[object] | None = None,
         page: int = 1,
         page_size: int = 100,
+        continuation_token: str | None = None,
+        order_by: str | None = None,
     ) -> object:
         return _run_tool(
             "sql_query_page",
@@ -209,6 +216,8 @@ def create_server(
                 params=params,
                 page=page,
                 page_size=page_size,
+                continuation_token=continuation_token,
+                order_by=order_by,
             ),
         )
 
@@ -225,16 +234,170 @@ def create_server(
             },
         )
 
+    @server.tool(name="capabilities_summary")
+    def capabilities_summary() -> object:
+        return _run_tool(
+            "capabilities_summary",
+            "admin",
+            lambda: {
+                "service": {
+                    "name": "faircom-mcp",
+                    "version": "0.1.5",
+                    "compatibility": {
+                        "faircom": ["Edge", "DB", "RTG", "ISAM", "MQ"],
+                        "transport": ["http", "sse", "stdio"],
+                    },
+                },
+                "transport_modes": [
+                    {"name": "http", "status": "available"},
+                    {"name": "sse", "status": "available"},
+                    {"name": "stdio", "status": "available"},
+                ],
+                "security": {
+                    "tool_groups": list(resolved_config.security.tool_group_allowlist),
+                    "default_policy": resolved_config.security.policy_preset or "default",
+                    "read_write_enabled": "write" in resolved_config.security.tool_group_allowlist,
+                    "diagnostics_enabled": resolved_config.security.diagnostics_enabled,
+                    "features": ["dry_run", "audit_logging", "policy_enforcement"],
+                },
+                "tools": [
+                    {
+                        "name": "list_tables",
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "List tables visible to the configured access context.",
+                    },
+                    {
+                        "name": "describe_table",
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Describe a table schema and basic metadata.",
+                    },
+                    {
+                        "name": "list_table_columns",
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Return column metadata for a table.",
+                    },
+                    {
+                        "name": "list_table_indexes",
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Return indexes for a table.",
+                    },
+                    {
+                        "name": "sql_query",
+                        "group": "query",
+                        "risk_level": "medium",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Run a read-only SQL statement and return results.",
+                    },
+                    {
+                        "name": "sql_query_page",
+                        "group": "query",
+                        "risk_level": "medium",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Run paged SQL queries with page-size and continuation control.",
+                    },
+                    {
+                        "name": "sql_execute",
+                        "group": "write",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": "Execute a write statement with confirmation guardrails and optional dry-run preview.",
+                    },
+                    {
+                        "name": "runtime_status",
+                        "group": "admin",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Return runtime configuration flags and policy state.",
+                    },
+                ],
+                "metadata": {
+                    "documentation": "https://github.com/faircom/faircom-mcp",
+                    "audit_logging": True,
+                    "observability": resolved_config.observability.enable_metrics,
+                },
+            },
+        )
+
+    @server.tool(name="observability_metrics")
+    def observability_metrics() -> object:
+        return _run_tool(
+            "observability_metrics",
+            "admin",
+            lambda: {
+                "service": "faircom-mcp",
+                **metrics.snapshot(),
+            },
+        )
+
+    @server.tool(name="observability_audit")
+    def observability_audit() -> object:
+        return _run_tool(
+            "observability_audit",
+            "admin",
+            lambda: {
+                "service": "faircom-mcp",
+                "events": audit_log.snapshot(),
+            },
+        )
+
+    @server.tool(name="observability_health")
+    def observability_health() -> object:
+        return _run_tool(
+            "observability_health",
+            "admin",
+            lambda: {
+                "service": "faircom-mcp",
+                "status": "ok",
+                "details": {
+                    "metrics_enabled": resolved_config.observability.enable_metrics,
+                    "tracing_enabled": resolved_config.observability.enable_tracing,
+                    "diagnostics_enabled": resolved_config.security.diagnostics_enabled,
+                },
+            },
+        )
+
     @server.tool(name="sql_execute")
     def sql_execute(
         statement: str,
         params: list[object] | None = None,
         confirm_write: bool = False,
+        dry_run: bool = False,
     ) -> object:
         logger.info(
             "sql_execute requested",
-            extra={"statement": statement, "params": params, "confirm_write": confirm_write},
+            extra={
+                "statement": statement,
+                "params": params,
+                "confirm_write": confirm_write,
+                "dry_run": dry_run,
+            },
         )
+        audit_log.record(
+            event_type="write_attempt",
+            details={"statement": statement, "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "sql_execute",
+                "write",
+                lambda: sql.execute(statement, params=params, dry_run=True),
+            )
         if not confirm_write:
             raise ValidationFailure(
                 "sql_execute requires confirm_write=True",
