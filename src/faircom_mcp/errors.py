@@ -77,7 +77,10 @@ class UpstreamAPIError(FaircomError):
             details=details or {},
             retryable=retryable,
             category="upstream_failure",
-            hint="The upstream FairCom service is unavailable or timed out. Retry with backoff if appropriate.",
+            hint=(
+                "The upstream FairCom service is unavailable or timed out. "
+                "Retry with backoff if appropriate."
+            ),
         )
 
 

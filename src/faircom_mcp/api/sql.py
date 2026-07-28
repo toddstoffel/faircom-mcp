@@ -98,7 +98,12 @@ class SQLAdapter:
         if self._policy is not None:
             self._policy.validate(statement, operation=operation)
 
-    def _build_dry_run_result(self, statement: str, *, params: Sequence[Any] | None) -> dict[str, Any]:
+    def _build_dry_run_result(
+        self,
+        statement: str,
+        *,
+        params: Sequence[Any] | None,
+    ) -> dict[str, Any]:
         statement_type = self._classify_statement(statement)
         target_table = self._extract_target_table(statement)
         changes = {
@@ -151,7 +156,11 @@ class SQLAdapter:
 
     def _extract_target_table(self, statement: str) -> str | None:
         normalized = statement.strip()
-        for pattern in (r"\bUPDATE\s+([A-Za-z0-9_.]+)", r"\bDELETE\s+FROM\s+([A-Za-z0-9_.]+)", r"\bINSERT\s+INTO\s+([A-Za-z0-9_.]+)"):
+        for pattern in (
+            r"\bUPDATE\s+([A-Za-z0-9_.]+)",
+            r"\bDELETE\s+FROM\s+([A-Za-z0-9_.]+)",
+            r"\bINSERT\s+INTO\s+([A-Za-z0-9_.]+)",
+        ):
             match = re.search(pattern, normalized, flags=re.IGNORECASE)
             if match:
                 return match.group(1)
@@ -232,7 +241,10 @@ class SQLAdapter:
         enriched["next_cursor"] = next_page
         if has_more:
             enriched["continuation"] = {
-                "token": self._encode_continuation_token(offset=offset + page_size, order_by=order_by),
+                "token": self._encode_continuation_token(
+                    offset=offset + page_size,
+                    order_by=order_by,
+                ),
                 "hint": "Pass this token as continuation_token to fetch the next page",
             }
         else:

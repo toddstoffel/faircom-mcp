@@ -162,7 +162,12 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
                     "statement": statement,
                     "params": params,
                     "preview": "Write statement would execute",
-                    "preview_details": {"target_table": "demo", "operation": "DELETE", "scoped_by_where": True, "row_estimate": "unknown"},
+                    "preview_details": {
+                        "target_table": "demo",
+                        "operation": "DELETE",
+                        "scoped_by_where": True,
+                        "row_estimate": "unknown",
+                    },
                     "sample_results": {"before": [{"id": 1}], "after": []},
                 }
             return {"statement": statement, "params": params}
@@ -269,8 +274,14 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert capabilities["security"]["read_write_enabled"] is True
     assert capabilities["security"]["diagnostics_enabled"] is False
     assert capabilities["transport_modes"][0]["name"] == "http"
-    assert any(tool["name"] == "sql_execute" and tool["risk_level"] == "critical" for tool in capabilities["tools"])
-    assert any(tool["name"] == "sql_query_page" and tool["idempotent"] is True for tool in capabilities["tools"])
+    assert any(
+        tool["name"] == "sql_execute" and tool["risk_level"] == "critical"
+        for tool in capabilities["tools"]
+    )
+    assert any(
+        tool["name"] == "sql_query_page" and tool["idempotent"] is True
+        for tool in capabilities["tools"]
+    )
     metrics_payload = server.tools["observability_metrics"]()
     assert metrics_payload["service"] == "faircom-mcp"
     assert isinstance(metrics_payload["tool_calls"], dict)

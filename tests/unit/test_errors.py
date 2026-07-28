@@ -64,4 +64,7 @@ def test_normalize_exception_adds_default_hint_for_internal_errors() -> None:
     normalized = normalize_exception(RuntimeError("boom"))
 
     assert normalized.category == "internal"
-    assert normalized.hint == "Unexpected server error. Please retry or contact support if it persists."
+    assert (
+        normalized.hint
+        == "Unexpected server error. Please retry or contact support if it persists."
+    )

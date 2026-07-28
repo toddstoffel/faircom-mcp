@@ -41,8 +41,11 @@ def create_server(
     def _run_tool(tool_name: str, group: str, action: Callable[[], object]) -> object:
         try:
             tool_group_policy.validate(group)
-        except Exception as exc:
-            audit_log.record(event_type="policy_denial", details={"tool": tool_name, "group": group})
+        except Exception:
+            audit_log.record(
+                event_type="policy_denial",
+                details={"tool": tool_name, "group": group},
+            )
             raise
         started = time.perf_counter()
         try:
@@ -307,7 +310,10 @@ def create_server(
                         "risk_level": "medium",
                         "idempotent": True,
                         "stability": "stable",
-                        "description": "Run paged SQL queries with page-size and continuation control.",
+                        "description": (
+                            "Run paged SQL queries with page-size and continuation "
+                            "control."
+                        ),
                     },
                     {
                         "name": "sql_execute",
@@ -315,7 +321,10 @@ def create_server(
                         "risk_level": "critical",
                         "idempotent": False,
                         "stability": "stable",
-                        "description": "Execute a write statement with confirmation guardrails and optional dry-run preview.",
+                        "description": (
+                            "Execute a write statement with confirmation guardrails "
+                            "and optional dry-run preview."
+                        ),
                     },
                     {
                         "name": "runtime_status",
