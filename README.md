@@ -358,8 +358,111 @@ FAIRCOM_SQL_DENYLIST=DROP,TRUNCATE,ALTER
 | `sql_query(statement, params?)` | Execute SELECT (read-only) | Read-only |
 | `sql_query_page(statement, params?, page, page_size)` | Paginated SELECT | Read-only |
 | `sql_execute(statement, params?, confirm_write, dry_run)` | INSERT/UPDATE/DELETE (requires `confirm_write=true` unless `dry_run=true`) | Write |
+| `get_usage_contract()` | Canonical args, aliases, transport/session guidance, examples | Read-only |
 | `runtime_status()` | Health, version, diagnostics | Read-only |
 | `capabilities_summary()` | Discover enabled tool groups and policy preset | Read-only |
+
+## Common AI Client Mistakes (And Fixes)
+
+These are the most common payload issues across Claude, Copilot, ChatGPT, Gemini, and custom agents.
+
+### 1) Wrong key for `sql_query`
+
+Wrong:
+```json
+{"name":"sql_query","arguments":{"sql":"SELECT COUNT(*) FROM demo_assets"}}
+```
+
+Correct canonical form:
+```json
+{"name":"sql_query","arguments":{"statement":"SELECT COUNT(*) FROM demo_assets"}}
+```
+
+Notes:
+- The server accepts aliases `sql` and `query`, normalizes to `statement`, and returns normalization metadata.
+- The server also normalizes `SELECT FIRST N ...` to `SELECT TOP N ...` for FairCom compatibility.
+
+### 2) Wrong key for table metadata tools
+
+Wrong:
+```json
+{"name":"describe_table","arguments":{"table":"demo_assets"}}
+```
+
+Correct canonical form:
+```json
+{"name":"describe_table","arguments":{"table_name":"demo_assets"}}
+```
+
+Notes:
+- The server accepts `table` alias and normalizes to `table_name`.
+
+### 3) list_tables filtering key mismatch
+
+Wrong:
+```json
+{"name":"list_tables","arguments":{"table_like":"demo_%"}}
+```
+
+Correct canonical form:
+```json
+{"name":"list_tables","arguments":{"name_like":"demo_%"}}
+```
+
+Notes:
+- `table_like` is accepted as an alias and normalized to `name_like`.
+- `database` is accepted for compatibility; current adapter may ignore backend scoping and reports that explicitly.
+
+### 4) SQL dialect mismatch (`LIMIT/OFFSET/FETCH`)
+
+Risky for this backend:
+```sql
+SELECT * FROM demo_assets ORDER BY id DESC LIMIT 25 OFFSET 10
+```
+
+Preferred FairCom-compatible style:
+```sql
+SELECT SKIP 10 TOP 25 * FROM demo_assets ORDER BY id DESC
+```
+
+Notes:
+- The server returns a structured validation error with `suggested_fix` and `example_payload` for unsupported SQL feature patterns.
+- Unsupported SQL tokens are reported explicitly in `unsupported_sql_feature` (for example: `LIMIT`, `OFFSET`, `FETCH`).
+
+## Session Recovery Quick Fix
+
+If you receive a missing/stale session error:
+
+1. Call `initialize` again.
+2. Capture the new `Mcp-Session-Id`.
+3. Retry the failed `tools/call` request with the new session id.
+
+Tip:
+- Call `get_usage_contract` once at startup to load canonical argument keys and aliases.
+- A versioned contract snapshot is also published at `docs/mcp-usage-contract.v2026-07-28.json`.
+
+## JSON Mode vs SSE Mode
+
+- `--transport http`: best for JSON-only clients.
+- `--transport sse`: best for clients that parse `text/event-stream` framing.
+- `--transport stdio`: local process transport for MCP hosts.
+
+If your parser is brittle against SSE envelopes, run the server in HTTP mode and keep request/response handling strictly JSON.
+
+## Official JSON-RPC Helper Clients
+
+Reference helper clients are available for strict JSON-RPC integrations:
+
+- `examples/clients/python/mcp_http_helper.py`
+- `examples/clients/javascript/mcpHttpHelper.mjs`
+
+These helpers implement the compatibility workflow used by this server:
+
+- initialize session before tool calls
+- reuse `Mcp-Session-Id`
+- force `Accept: application/json` for deterministic JSON mode
+- reinitialize once and retry when `reason_code` indicates `missing_session` or `stale_session`
+- preview writes using `sql_execute` with `dry_run=true`
 
 ## Observability & Operations
 

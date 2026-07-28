@@ -23,6 +23,13 @@ Ensure user-level scripts are on `PATH`:
 export PATH="$(python3 -m site --user-base)/bin:$PATH"
 ```
 
+Helper client examples for JSON-RPC session handling:
+
+- Python: `python3 examples/clients/python/mcp_http_helper.py`
+- JavaScript: `node examples/clients/javascript/mcpHttpHelper.mjs`
+
+Run these against a local server started in HTTP mode (`--transport http` or `--transport auto`).
+
 ## Script Separation: Local vs Publish
 Local build/test scripts are for developer verification only and do not publish externally:
 

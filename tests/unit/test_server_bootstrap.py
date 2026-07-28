@@ -107,9 +107,14 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     sql_execute_calls: list[tuple[str, list[object] | None]] = []
 
     class FakeTables:
-        def list_tables(self, name_like: str | None = None) -> dict[str, object]:
+        def list_tables(
+            self,
+            name_like: str | None = None,
+            *,
+            database: str | None = None,
+        ) -> dict[str, object]:
             list_table_calls.append(name_like)
-            return {"tables": [], "name_like": name_like}
+            return {"tables": [], "name_like": name_like, "database": database}
 
         def describe_table(self, table_name: str) -> dict[str, object]:
             describe_table_calls.append(table_name)
@@ -205,6 +210,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "list_table_indexes",
         "sql_query",
         "sql_query_page",
+        "get_usage_contract",
         "runtime_status",
         "capabilities_summary",
         "observability_metrics",
@@ -222,34 +228,67 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert server.tools["list_tables"]() == {
         "tables": [],
         "name_like": None,
+        "database": None,
     }
-    assert server.tools["list_tables"](name_like="foo") == {
+    assert server.tools["list_tables"](table_like="foo", database="faircom") == {
         "tables": [],
         "name_like": "foo",
+        "database": "faircom",
+        "compatibility": {
+            "tool_name": "list_tables",
+            "normalized_args": [{"from": "table_like", "to": "name_like"}],
+            "metadata": {
+                "database": {
+                    "received": "faircom",
+                    "applied": False,
+                    "reason": "database_scoping_not_supported_by_backend_adapter",
+                },
+            },
+        },
     }
-    assert server.tools["describe_table"](table_name="demo") == {
+    assert server.tools["describe_table"](table="demo") == {
         "table_name": "demo",
         "columns": [],
+        "compatibility": {
+            "tool_name": "describe_table",
+            "normalized_args": [{"from": "table", "to": "table_name"}],
+            "metadata": {},
+        },
     }
-    assert server.tools["list_table_columns"](table_name="demo") == {
+    assert server.tools["list_table_columns"](table="demo") == {
         "table_name": "demo",
         "columns": [{"name": "id"}],
         "column_count": 1,
+        "compatibility": {
+            "tool_name": "list_table_columns",
+            "normalized_args": [{"from": "table", "to": "table_name"}],
+            "metadata": {},
+        },
     }
-    assert server.tools["list_table_indexes"](table_name="demo") == {
+    assert server.tools["list_table_indexes"](table="demo") == {
         "table_name": "demo",
         "indexes": [{"name": "pk_demo"}],
         "index_count": 1,
+        "compatibility": {
+            "tool_name": "list_table_indexes",
+            "normalized_args": [{"from": "table", "to": "table_name"}],
+            "metadata": {},
+        },
     }
     assert server.tools["sql_query"](
-        statement="select * from demo",
+        sql="select * from demo",
         params=[1, "two"],
     ) == {
         "statement": "select * from demo",
         "params": [1, "two"],
+        "compatibility": {
+            "tool_name": "sql_query",
+            "normalized_args": [{"from": "sql", "to": "statement"}],
+            "metadata": {},
+        },
     }
     assert server.tools["sql_query_page"](
-        statement="select * from demo order by id",
+        query="select * from demo order by id",
         params=["active"],
         page=3,
         page_size=50,
@@ -260,7 +299,15 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "page_size": 50,
         "continuation_token": None,
         "order_by": None,
+        "compatibility": {
+            "tool_name": "sql_query_page",
+            "normalized_args": [{"from": "query", "to": "statement"}],
+            "metadata": {},
+        },
     }
+    usage_contract = server.tools["get_usage_contract"]()
+    assert usage_contract["contract_version"] == "2026-07-28"
+    assert usage_contract["supported_aliases"]["sql_query"]["sql"] == "statement"
     assert server.tools["runtime_status"]() == {
         "service": "faircom-mcp",
         "tool_group_allowlist": ["metadata", "query", "write", "admin", "diagnostics"],
@@ -286,6 +333,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert metrics_payload["service"] == "faircom-mcp"
     assert isinstance(metrics_payload["tool_calls"], dict)
     assert isinstance(metrics_payload["tool_seconds_total"], dict)
+    assert isinstance(metrics_payload["compatibility_events"], dict)
+    assert metrics_payload["compatibility_events"]["sql_query:alias_normalized"] >= 1
     assert server.tools["observability_audit"]() == {"service": "faircom-mcp", "events": []}
     assert server.tools["observability_health"]() == {
         "service": "faircom-mcp",
@@ -299,7 +348,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     try:
         server.tools["sql_execute"](statement="update demo set flag = 1")
     except ValidationFailure as exc:
-        assert exc.details == {"tool": "sql_execute"}
+        assert exc.details["tool_name"] == "sql_execute"
+        assert exc.details["reason_code"] == "missing_write_confirmation"
     else:  # pragma: no cover - defensive
         raise AssertionError("sql_execute should require explicit confirmation")
 
@@ -310,6 +360,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     ) == {
         "statement": "update demo set flag = 1",
         "params": ["x"],
+        "dry_run_applied": False,
+        "confirm_write_required": True,
+        "mutation_applied": True,
     }
     assert server.tools["sql_execute"](
         statement="delete from demo where id = 1",
@@ -327,10 +380,14 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "row_estimate": "unknown",
         },
         "sample_results": {"before": [{"id": 1}], "after": []},
+        "dry_run_applied": True,
+        "confirm_write_required": True,
+        "mutation_applied": False,
     }
     metrics_response = _get("/metrics", app)
     assert metrics_response.status_code == 200
     assert "faircom_mcp_tool_calls_total" in metrics_response.text
+    assert "faircom_mcp_compatibility_events_total" in metrics_response.text
 
     assert list_table_calls == [None, "foo"]
     assert describe_table_calls == ["demo"]
@@ -342,6 +399,163 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         ("update demo set flag = 1", ["x"]),
         ("delete from demo where id = 1", ["x"]),
     ]
+
+
+def test_sql_query_rejects_limit_with_repair_hint(monkeypatch: object) -> None:
+    _fake_class, server_module = _load_server_module(monkeypatch)
+    config = _config()
+
+    class FakeTables:
+        def list_tables(
+            self,
+            name_like: str | None = None,
+            *,
+            database: str | None = None,
+        ) -> dict[str, object]:
+            return {"tables": [], "name_like": name_like, "database": database}
+
+        def describe_table(self, table_name: str) -> dict[str, object]:
+            return {"table_name": table_name}
+
+        def list_table_columns(self, table_name: str) -> dict[str, object]:
+            return {"table_name": table_name, "columns": []}
+
+        def list_table_indexes(self, table_name: str) -> dict[str, object]:
+            return {"table_name": table_name, "indexes": []}
+
+    class FakeSQL:
+        def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
+            return {"statement": statement, "params": params}
+
+        def query_page(
+            self,
+            statement: str,
+            params: list[object] | None = None,
+            *,
+            page: int = 1,
+            page_size: int = 100,
+            continuation_token: str | None = None,
+            order_by: str | None = None,
+        ) -> dict[str, object]:
+            return {
+                "statement": statement,
+                "params": params,
+                "page": page,
+                "page_size": page_size,
+                "continuation_token": continuation_token,
+                "order_by": order_by,
+            }
+
+        def execute(
+            self,
+            statement: str,
+            params: list[object] | None = None,
+            *,
+            dry_run: bool = False,
+        ) -> dict[str, object]:
+            return {"statement": statement, "params": params, "dry_run": dry_run}
+
+    original_table_adapter = server_module.TableAdapter
+    original_sql_adapter = server_module.SQLAdapter
+    server_module.TableAdapter = lambda _client: FakeTables()
+    server_module.SQLAdapter = lambda _client, **_kwargs: FakeSQL()
+    try:
+        server = server_module.create_server(config, client_factory=lambda _config: object())
+    finally:
+        server_module.TableAdapter = original_table_adapter
+        server_module.SQLAdapter = original_sql_adapter
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["sql_query"](statement="select * from demo limit 1")
+
+    assert exc.value.details["tool_name"] == "sql_query"
+    assert exc.value.details["reason_code"] == "unsupported_sql_feature"
+    assert exc.value.details["unsupported_sql_feature"] == ["LIMIT"]
+    assert "TOP" in exc.value.details["suggested_fix"]
+
+    metrics_payload = server.tools["observability_metrics"]()
+    assert metrics_payload["compatibility_events"]["sql_query:unsupported_sql_feature"] >= 1
+
+    with pytest.raises(ValidationFailure) as write_exc:
+        server.tools["sql_execute"](statement="update demo set flag = 1")
+
+    assert write_exc.value.details["reason_code"] == "missing_write_confirmation"
+    metrics_payload_after = server.tools["observability_metrics"]()
+    assert metrics_payload_after["compatibility_events"]["sql_execute:invalid_arg_name"] >= 1
+
+
+def test_sql_query_normalizes_select_first_to_top(monkeypatch: object) -> None:
+    _fake_class, server_module = _load_server_module(monkeypatch)
+    config = _config()
+
+    class FakeTables:
+        def list_tables(
+            self,
+            name_like: str | None = None,
+            *,
+            database: str | None = None,
+        ) -> dict[str, object]:
+            return {"tables": [], "name_like": name_like, "database": database}
+
+        def describe_table(self, table_name: str) -> dict[str, object]:
+            return {"table_name": table_name}
+
+        def list_table_columns(self, table_name: str) -> dict[str, object]:
+            return {"table_name": table_name, "columns": []}
+
+        def list_table_indexes(self, table_name: str) -> dict[str, object]:
+            return {"table_name": table_name, "indexes": []}
+
+    class FakeSQL:
+        def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
+            return {"statement": statement, "params": params}
+
+        def query_page(
+            self,
+            statement: str,
+            params: list[object] | None = None,
+            *,
+            page: int = 1,
+            page_size: int = 100,
+            continuation_token: str | None = None,
+            order_by: str | None = None,
+        ) -> dict[str, object]:
+            return {
+                "statement": statement,
+                "params": params,
+                "page": page,
+                "page_size": page_size,
+                "continuation_token": continuation_token,
+                "order_by": order_by,
+            }
+
+        def execute(
+            self,
+            statement: str,
+            params: list[object] | None = None,
+            *,
+            dry_run: bool = False,
+        ) -> dict[str, object]:
+            return {"statement": statement, "params": params, "dry_run": dry_run}
+
+    original_table_adapter = server_module.TableAdapter
+    original_sql_adapter = server_module.SQLAdapter
+    server_module.TableAdapter = lambda _client: FakeTables()
+    server_module.SQLAdapter = lambda _client, **_kwargs: FakeSQL()
+    try:
+        server = server_module.create_server(config, client_factory=lambda _config: object())
+    finally:
+        server_module.TableAdapter = original_table_adapter
+        server_module.SQLAdapter = original_sql_adapter
+
+    result = server.tools["sql_query"](
+        statement="select first 5 id, status from demo_assets order by id",
+    )
+
+    assert result["statement"] == "select TOP 5 id, status from demo_assets order by id"
+    assert result["compatibility"]["metadata"]["sql_rewrites"] == [{"from": "FIRST", "to": "TOP"}]
+    metrics_payload = server.tools["observability_metrics"]()
+    assert metrics_payload["compatibility_events"]["sql_query:sql_rewritten_first_to_top"] >= 1
 
 
 def test_create_http_app_honors_transport_and_readiness(monkeypatch: object) -> None:
@@ -360,6 +574,33 @@ def test_create_http_app_honors_transport_and_readiness(monkeypatch: object) -> 
     assert _get("/readyz", app).status_code == 503
     assert _get("/readyz", app).json() == {"status": "not_ready"}
     assert _get("/mcp", app).json() == {"transport": "sse"}
+
+
+def test_create_http_app_auto_negotiates_transport(monkeypatch: object) -> None:
+    fake_class, server_module = _load_server_module(monkeypatch)
+    config = _config()
+
+    app = server_module.create_http_app(
+        config,
+        readiness_check=lambda: True,
+        transport="auto",
+    )
+
+    assert fake_class.last_instance is not None
+    assert fake_class.last_instance.http_app_calls == ["http", "sse"]
+
+    async def _request_with_accept(accept: str) -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await client.get("/mcp", headers={"Accept": accept})
+
+    http_response = asyncio.run(_request_with_accept("application/json"))
+    sse_response = asyncio.run(_request_with_accept("text/event-stream"))
+
+    assert http_response.status_code == 200
+    assert sse_response.status_code == 200
+    assert http_response.json() == {"transport": "http"}
+    assert sse_response.json() == {"transport": "sse"}
 
 
 def test_create_server_enforces_tool_group_policy(monkeypatch: object) -> None:

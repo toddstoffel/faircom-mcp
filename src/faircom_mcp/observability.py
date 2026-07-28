@@ -12,11 +12,16 @@ class RuntimeMetrics:
         self._lock = threading.Lock()
         self._tool_calls: dict[tuple[str, str], int] = defaultdict(int)
         self._tool_seconds: dict[str, float] = defaultdict(float)
+        self._compat_events: dict[tuple[str, str], int] = defaultdict(int)
 
     def record_tool_call(self, *, tool: str, status: str, duration_seconds: float) -> None:
         with self._lock:
             self._tool_calls[(tool, status)] += 1
             self._tool_seconds[tool] += max(0.0, duration_seconds)
+
+    def record_compat_event(self, *, tool: str, event: str) -> None:
+        with self._lock:
+            self._compat_events[(tool, event)] += 1
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -27,6 +32,10 @@ class RuntimeMetrics:
                 },
                 "tool_seconds_total": {
                     tool: round(total, 6) for tool, total in sorted(self._tool_seconds.items())
+                },
+                "compatibility_events": {
+                    f"{tool}:{event}": count
+                    for (tool, event), count in sorted(self._compat_events.items())
                 },
             }
 
@@ -50,6 +59,20 @@ class RuntimeMetrics:
             )
             for tool, total in sorted(self._tool_seconds.items()):
                 lines.append(f'faircom_mcp_tool_seconds_total{{tool="{tool}"}} {total:.6f}')
+
+            lines.extend(
+                [
+                    "# HELP faircom_mcp_compatibility_events_total Compatibility and self-repair events",
+                    "# TYPE faircom_mcp_compatibility_events_total counter",
+                ]
+            )
+            for (tool, event), count in sorted(self._compat_events.items()):
+                lines.append(
+                    (
+                        "faircom_mcp_compatibility_events_total"
+                        f'{{tool="{tool}",event="{event}"}} {count}'
+                    )
+                )
 
         return "\n".join(lines) + "\n"
 

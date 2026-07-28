@@ -12,7 +12,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="FairCom MCP server")
     parser.add_argument(
         "--transport",
-        choices=("http", "sse", "stdio"),
+        choices=("http", "sse", "auto", "stdio"),
         default="stdio",
         help="Transport mode to run",
     )

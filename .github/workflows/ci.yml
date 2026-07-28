@@ -34,6 +34,9 @@ jobs:
       - name: Type check
         run: mypy src
 
+      - name: Compatibility regression matrix
+        run: pytest tests/unit/test_compatibility_matrix.py
+
       - name: Unit and integration tests
         run: pytest -m "not edge_integration"
 

@@ -1,0 +1,117 @@
+{
+  "contract_version": "2026-07-28",
+  "updated_at": "2026-07-28",
+  "required_call_order": [
+    "initialize",
+    "tools/list",
+    "tools/call"
+  ],
+  "session_requirements": {
+    "required": true,
+    "header": "Mcp-Session-Id",
+    "missing_or_stale_behavior": "Re-run initialize and retry the failed call with the new session id."
+  },
+  "transport_notes": {
+    "http": "Use JSON transport for plain JSON payloads.",
+    "sse": "Use an SSE parser for text/event-stream framing.",
+    "stdio": "Use MCP stdio framing for local process transport."
+  },
+  "canonical_arg_keys": {
+    "sql_query": [
+      "statement",
+      "params"
+    ],
+    "sql_query_page": [
+      "statement",
+      "params",
+      "page",
+      "page_size",
+      "continuation_token",
+      "order_by"
+    ],
+    "list_tables": [
+      "name_like",
+      "database"
+    ],
+    "describe_table": [
+      "table_name"
+    ],
+    "list_table_columns": [
+      "table_name"
+    ],
+    "list_table_indexes": [
+      "table_name"
+    ],
+    "sql_execute": [
+      "statement",
+      "params",
+      "confirm_write",
+      "dry_run"
+    ]
+  },
+  "supported_aliases": {
+    "sql_query": {
+      "sql": "statement",
+      "query": "statement"
+    },
+    "sql_query_page": {
+      "sql": "statement",
+      "query": "statement"
+    },
+    "list_tables": {
+      "table_like": "name_like"
+    },
+    "describe_table": {
+      "table": "table_name"
+    },
+    "list_table_columns": {
+      "table": "table_name"
+    },
+    "list_table_indexes": {
+      "table": "table_name"
+    },
+    "sql_execute": {
+      "sql": "statement",
+      "query": "statement"
+    }
+  },
+  "minimal_payload_examples": {
+    "sql_query": {
+      "name": "sql_query",
+      "arguments": {
+        "statement": "SELECT COUNT(*) AS row_count FROM demo_assets"
+      }
+    },
+    "list_tables": {
+      "name": "list_tables",
+      "arguments": {
+        "name_like": "demo_%"
+      }
+    },
+    "sql_execute": {
+      "name": "sql_execute",
+      "arguments": {
+        "statement": "UPDATE demo_assets SET status='active' WHERE id = 1",
+        "confirm_write": true
+      }
+    }
+  },
+  "dialect_notes": {
+    "row_limit": "Prefer TOP N and optional SKIP N.",
+    "auto_normalization": "SELECT FIRST N is normalized to SELECT TOP N.",
+    "unsupported_tokens": [
+      "LIMIT",
+      "OFFSET",
+      "FETCH"
+    ]
+  },
+  "error_shape": {
+    "error_code": "validation_error",
+    "reason_code": "invalid_arguments|unsupported_sql_feature|missing_write_confirmation",
+    "tool_name": "string",
+    "expected_args": "object",
+    "received_args": "object",
+    "suggested_fix": "string",
+    "example_payload": "object"
+  }
+}

@@ -9,10 +9,17 @@ class TableAdapter:
     def __init__(self, client: FaircomAPIClient) -> None:
         self._client = client
 
-    def list_tables(self, name_like: str | None = None) -> Any:
+    def list_tables(
+        self,
+        name_like: str | None = None,
+        *,
+        database: str | None = None,
+    ) -> Any:
         payload: dict[str, str] = {}
         if name_like:
             payload["tableNameLike"] = name_like
+        # The current adapter/runtime path does not apply database scoping for listTables.
+        _ = database
         return self._client.post_action("listTables", payload or None)
 
     def describe_table(self, table_name: str) -> Any:
