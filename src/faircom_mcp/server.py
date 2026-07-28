@@ -311,8 +311,7 @@ def create_server(
                         "idempotent": True,
                         "stability": "stable",
                         "description": (
-                            "Run paged SQL queries with page-size and continuation "
-                            "control."
+                            "Run paged SQL queries with page-size and continuation control."
                         ),
                     },
                     {

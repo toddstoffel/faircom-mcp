@@ -171,8 +171,7 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
     tls_verify = _parse_bool(env_values.get("FAIRCOM_TLS_VERIFY"), default=True)
     policy_preset = _parse_policy_preset(env_values.get("FAIRCOM_POLICY_PRESET"))
     tool_group_allowlist = tuple(
-        value.lower()
-        for value in _parse_csv_values(env_values.get("FAIRCOM_TOOL_GROUP_ALLOWLIST"))
+        value.lower() for value in _parse_csv_values(env_values.get("FAIRCOM_TOOL_GROUP_ALLOWLIST"))
     )
     if not tool_group_allowlist:
         tool_group_allowlist = DEFAULT_TOOL_GROUP_ALLOWLIST

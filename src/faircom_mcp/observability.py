@@ -72,6 +72,7 @@ class AuditLog:
         with self._lock:
             return [dict(event) for event in self._events]
 
+
 def build_tracer(*, enabled: bool) -> Any:
     if not enabled:
         return None
