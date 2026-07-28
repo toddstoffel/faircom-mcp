@@ -21,7 +21,7 @@ test-integration:
 	python3 -m pytest -m "integration and not edge_integration"
 
 test-edge:
-	bash scripts/test_with_edge.sh
+	bash tests/integration/test_with_edge.sh
 
 container-build:
 	docker build -t faircom-mcp:local .
@@ -56,10 +56,10 @@ package-verify:
 	test -f packaging/deb/postrm
 
 package-build: package-verify
-	bash scripts/build_linux_packages.sh
+	bash devtools/build_linux_packages.sh
 
 package-validate:
-	bash scripts/validate_linux_packages.sh
+	bash devtools/validate_linux_packages.sh
 
 release-integrity:
-	bash scripts/generate_release_integrity.sh
+	bash devtools/generate_release_integrity.sh

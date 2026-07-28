@@ -9,7 +9,7 @@ usage() {
 Publish a release by creating/pushing a git tag and monitoring release workflows.
 
 Usage:
-  scripts/publish_release.sh <tag> [--no-wait] [--allow-dirty]
+  devtools/publish_release.sh <tag> [--no-wait] [--allow-dirty]
 
 Arguments:
   <tag>           Release tag to publish (must start with 'v', e.g. v0.1.4)

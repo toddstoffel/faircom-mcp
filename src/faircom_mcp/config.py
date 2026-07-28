@@ -6,7 +6,12 @@ from os import environ
 from urllib.parse import urlparse
 
 from faircom_mcp.errors import ConfigurationError
-from faircom_mcp.security import SqlStatementPolicy, ToolGroupPolicy
+from faircom_mcp.security import (
+    DEFAULT_TOOL_GROUP_ALLOWLIST,
+    SqlStatementPolicy,
+    ToolGroupPolicy,
+    get_tool_group_allowlist_for_preset,
+)
 
 
 def _parse_bool(value: str | bool | None, *, default: bool) -> bool:
@@ -35,6 +40,20 @@ def _parse_csv_values(raw_value: str | None) -> tuple[str, ...]:
     return values
 
 
+def _parse_policy_preset(raw_value: str | None) -> str | None:
+    if not raw_value:
+        return None
+
+    normalized = raw_value.strip().lower()
+    if normalized not in {"default", "read_only", "analyst", "operator", "admin"}:
+        raise ConfigurationError(
+            "FAIRCOM_POLICY_PRESET must be one of: default, read_only, analyst, operator, admin",
+            details={"value": raw_value},
+        )
+
+    return normalized
+
+
 @dataclass(slots=True)
 class AuthConfig:
     username: str | None = None
@@ -52,13 +71,8 @@ class TransportConfig:
 class SecurityConfig:
     sql_allowlist: tuple[str, ...] = ()
     sql_denylist: tuple[str, ...] = ()
-    tool_group_allowlist: tuple[str, ...] = (
-        "metadata",
-        "query",
-        "write",
-        "admin",
-        "diagnostics",
-    )
+    tool_group_allowlist: tuple[str, ...] = DEFAULT_TOOL_GROUP_ALLOWLIST
+    policy_preset: str | None = None
     diagnostics_token: str | None = None
     diagnostics_enabled: bool = False
 
@@ -69,7 +83,11 @@ class SecurityConfig:
         )
 
     def to_tool_group_policy(self) -> ToolGroupPolicy:
-        return ToolGroupPolicy(allowlist=self.tool_group_allowlist)
+        allowlist = self.tool_group_allowlist
+        if self.tool_group_allowlist == DEFAULT_TOOL_GROUP_ALLOWLIST and self.policy_preset:
+            allowlist = get_tool_group_allowlist_for_preset(self.policy_preset)
+
+        return ToolGroupPolicy(allowlist=allowlist, policy_name=self.policy_preset)
 
 
 @dataclass(slots=True)
@@ -151,14 +169,19 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
     host = env_values.get("FAIRCOM_HTTP_HOST", "127.0.0.1")
     port = _parse_port(env_values.get("FAIRCOM_HTTP_PORT"))
     tls_verify = _parse_bool(env_values.get("FAIRCOM_TLS_VERIFY"), default=True)
+    policy_preset = _parse_policy_preset(env_values.get("FAIRCOM_POLICY_PRESET"))
+    tool_group_allowlist = tuple(
+        value.lower()
+        for value in _parse_csv_values(env_values.get("FAIRCOM_TOOL_GROUP_ALLOWLIST"))
+    )
+    if not tool_group_allowlist:
+        tool_group_allowlist = DEFAULT_TOOL_GROUP_ALLOWLIST
+
     security = SecurityConfig(
         sql_allowlist=_parse_csv_values(env_values.get("FAIRCOM_SQL_ALLOWLIST")),
         sql_denylist=_parse_csv_values(env_values.get("FAIRCOM_SQL_DENYLIST")),
-        tool_group_allowlist=tuple(
-            value.lower()
-            for value in _parse_csv_values(env_values.get("FAIRCOM_TOOL_GROUP_ALLOWLIST"))
-        )
-        or SecurityConfig().tool_group_allowlist,
+        tool_group_allowlist=tool_group_allowlist,
+        policy_preset=policy_preset,
         diagnostics_token=env_values.get("FAIRCOM_DIAGNOSTICS_TOKEN"),
         diagnostics_enabled=_parse_bool(
             env_values.get("FAIRCOM_ENABLE_DIAGNOSTICS_UI"),

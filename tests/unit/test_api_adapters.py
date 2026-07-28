@@ -83,6 +83,28 @@ def test_sql_adapter_calls_expected_actions() -> None:
     }
 
 
+def test_sql_adapter_returns_dry_run_preview_without_executing() -> None:
+    client = StubClient()
+    adapter = SQLAdapter(cast(Any, client))
+
+    result = adapter.execute(
+        "UPDATE customers SET status='active' WHERE id = 1",
+        dry_run=True,
+    )
+
+    assert result["mode"] == "dry_run"
+    assert result["status"] == "success"
+    assert result["statement_type"] == "UPDATE"
+    assert result["would_succeed"] is True
+    assert result["changes"]["updated_rows"] == 1
+    assert result["preview"] == "Write statement would execute"
+    assert result["preview_details"]["target_table"] == "customers"
+    assert result["preview_details"]["operation"] == "UPDATE"
+    assert result["sample_results"]["before"]
+    assert result["sample_results"]["after"]
+    assert client.calls == []
+
+
 def test_sql_adapter_paginated_query_calls_expected_action() -> None:
     client = StubClient()
     adapter = SQLAdapter(cast(Any, client))
@@ -132,6 +154,41 @@ def test_sql_adapter_paginated_query_adds_cursor_metadata() -> None:
     assert page_result["has_more"] is True
     assert page_result["next_page"] == 2
     assert page_result["next_cursor"] == 2
+
+
+def test_sql_adapter_generates_and_accepts_continuation_tokens() -> None:
+    client = StubClient()
+    adapter = SQLAdapter(cast(Any, client))
+
+    client.post_action = lambda action, payload=None: {
+        "action": action,
+        "payload": payload,
+        "result": {"data": [{"id": 1}], "moreRecords": True},
+    }
+
+    first_page = adapter.query_page("SELECT * FROM customers", page=1, page_size=1)
+    assert first_page["page"]["offset"] == 0
+    assert first_page["page"]["limit"] == 1
+    assert first_page["page"]["has_more"] is True
+    assert first_page["continuation"]["token"] is not None
+
+    second_page = adapter.query_page(
+        "SELECT * FROM customers",
+        continuation_token=first_page["continuation"]["token"],
+        page_size=1,
+    )
+
+    assert second_page["page"]["offset"] == 1
+    assert second_page["payload"]["skipRecords"] == 1
+
+
+def test_sql_adapter_injects_order_by_when_missing() -> None:
+    client = StubClient()
+    adapter = SQLAdapter(cast(Any, client))
+
+    adapter.query_page("SELECT * FROM customers", page=1, page_size=1)
+
+    assert client.calls[-1][1]["sql"] == "SELECT * FROM customers ORDER BY 1"
 
 
 def test_sql_adapter_paginated_query_validates_paging_inputs() -> None:

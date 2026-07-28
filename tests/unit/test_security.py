@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from faircom_mcp.errors import ValidationFailure
+from faircom_mcp.errors import ErrorCode, PolicyViolation, ValidationFailure
 from faircom_mcp.security import SqlStatementPolicy, ToolGroupPolicy
 
 
@@ -37,9 +37,13 @@ def test_tool_group_policy_allows_group() -> None:
 
 
 def test_tool_group_policy_blocks_disallowed_group() -> None:
-    policy = ToolGroupPolicy(allowlist=("metadata", "query"))
+    policy = ToolGroupPolicy(allowlist=("metadata", "query"), policy_name="analyst")
 
-    with pytest.raises(ValidationFailure) as exc:
+    with pytest.raises(PolicyViolation) as exc:
         policy.validate("write")
 
+    assert exc.value.code == ErrorCode.POLICY_VIOLATION
+    assert exc.value.category == "authorization"
     assert exc.value.details["policy"] == "tool_group_allowlist"
+    assert exc.value.details["policy_name"] == "analyst"
+    assert exc.value.hint is not None

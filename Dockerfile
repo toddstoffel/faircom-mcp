@@ -22,10 +22,10 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY src ./src
-COPY scripts ./scripts
+COPY devtools ./devtools
 COPY packaging ./packaging
 
-RUN PACKAGE_BUILD_MODE=native bash scripts/build_linux_packages.sh
+RUN PACKAGE_BUILD_MODE=native bash devtools/build_linux_packages.sh
 
 
 FROM fedora:41 AS package-builder-rpm
@@ -55,13 +55,13 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY src ./src
-COPY scripts ./scripts
+COPY devtools ./devtools
 COPY packaging ./packaging
 
 # Rocky ships Python 3.9; pass version explicitly to avoid tomllib parsing path.
 RUN APP_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n1)" \
     && test -n "$APP_VERSION" \
-    && PACKAGE_BUILD_MODE=native bash scripts/build_linux_packages.sh "$APP_VERSION"
+    && PACKAGE_BUILD_MODE=native bash devtools/build_linux_packages.sh "$APP_VERSION"
 
 
 FROM python:3.13-alpine AS runtime-deb

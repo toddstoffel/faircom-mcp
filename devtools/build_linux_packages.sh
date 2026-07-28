@@ -81,7 +81,7 @@ if [[ "${PACKAGE_BUILD_MODE}" == "container" && "${IN_DOCKER_FPM_BUILD}" != "1" 
       apt-get update >/dev/null
       apt-get install -y ca-certificates python3 python3-pip ruby ruby-dev build-essential rpm bash >/dev/null
       gem install --no-document fpm >/dev/null
-      bash scripts/build_linux_packages.sh "${VERSION}"
+      bash devtools/build_linux_packages.sh "${VERSION}"
     '
   exit 0
 fi

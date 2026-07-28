@@ -1,6 +1,7 @@
 # Local AI instructions
 .github/copilot-instructions.md
 private_notes/
+IMPROVEMENT-PLAN-TODOS.md
 
 # Environment and secrets
 .env

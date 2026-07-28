@@ -54,6 +54,24 @@ class RuntimeMetrics:
         return "\n".join(lines) + "\n"
 
 
+class AuditLog:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._events: list[dict[str, Any]] = []
+
+    def record(self, *, event_type: str, details: dict[str, Any] | None = None) -> None:
+        with self._lock:
+            self._events.append(
+                {
+                    "type": event_type,
+                    "details": details or {},
+                }
+            )
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(event) for event in self._events]
+
 def build_tracer(*, enabled: bool) -> Any:
     if not enabled:
         return None

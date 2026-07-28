@@ -1,6 +1,6 @@
 import pytest
 
-from faircom_mcp.config import load_config
+from faircom_mcp.config import SecurityConfig, load_config
 from faircom_mcp.errors import ConfigurationError
 
 
@@ -92,3 +92,30 @@ def test_load_config_uses_secure_tls_default() -> None:
     )
 
     assert config.tls_verify is True
+
+
+def test_security_config_uses_policy_preset_for_tool_groups() -> None:
+    config = SecurityConfig(policy_preset="analyst")
+
+    policy = config.to_tool_group_policy()
+
+    assert policy.allowlist == ("metadata", "query", "diagnostics")
+    assert policy.policy_name == "analyst"
+
+
+def test_load_config_applies_policy_preset_from_environment() -> None:
+    config = load_config(
+        {
+            "FAIRCOM_API_BASE_URL": "https://example.test",
+            "FAIRCOM_API_TOKEN": "abc123",
+            "FAIRCOM_POLICY_PRESET": "operator",
+        }
+    )
+
+    assert config.security.policy_preset == "operator"
+    assert config.security.to_tool_group_policy().allowlist == (
+        "metadata",
+        "query",
+        "write",
+        "diagnostics",
+    )
