@@ -117,7 +117,7 @@ class SQLAdapter:
             "scoped_by_where": "WHERE" in statement.upper(),
             "row_estimate": "unknown",
         }
-        sample_results = {
+        sample_results: dict[str, list[dict[str, Any]]] = {
             "before": [],
             "after": [],
         }
