@@ -62,16 +62,15 @@ class RuntimeMetrics:
 
             lines.extend(
                 [
-                    "# HELP faircom_mcp_compatibility_events_total Compatibility and self-repair events",
+                    "# HELP faircom_mcp_compatibility_events_total "
+                    "Compatibility and self-repair events",
                     "# TYPE faircom_mcp_compatibility_events_total counter",
                 ]
             )
             for (tool, event), count in sorted(self._compat_events.items()):
                 lines.append(
-                    (
-                        "faircom_mcp_compatibility_events_total"
-                        f'{{tool="{tool}",event="{event}"}} {count}'
-                    )
+                    "faircom_mcp_compatibility_events_total"
+                    f'{{tool="{tool}",event="{event}"}} {count}'
                 )
 
         return "\n".join(lines) + "\n"

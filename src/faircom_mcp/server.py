@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import html
-import httpx
 import json
 import logging
 import time
 import types
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from collections.abc import Callable
 from typing import Any, Literal
 
+import httpx
 from fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -44,8 +44,8 @@ def create_server(
     server = FastMCP("faircom-mcp")
     # Export runtime metrics for transport-layer compatibility wrappers.
     if not hasattr(server, "state"):
-        server.state = types.SimpleNamespace()
-    server.state.runtime_metrics = metrics
+        server.state = types.SimpleNamespace()  # type: ignore[attr-defined]
+    server.state.runtime_metrics = metrics  # type: ignore[attr-defined]
 
     def _run_tool(tool_name: str, group: str, action: Callable[[], object]) -> object:
         try:
@@ -149,7 +149,9 @@ def create_server(
             example_payload={
                 "name": tool_name,
                 "arguments": {
-                    "statement": "SELECT TOP 1 id, metric FROM demo_sensor_readings ORDER BY metric DESC"
+                    "statement": (
+                        "SELECT TOP 1 id, metric FROM demo_sensor_readings ORDER BY metric DESC"
+                    )
                 },
             },
             reason_code="unsupported_sql_feature",
@@ -189,7 +191,7 @@ def create_server(
                 normalized_args.append({"from": alias_name, "to": canonical_name})
                 continue
             if alias_value != chosen:
-                received_args = {
+                received_args: dict[str, object] = {
                     canonical_name: chosen,
                     alias_name: alias_value,
                 }
@@ -205,14 +207,17 @@ def create_server(
                 )
 
         if chosen is None:
-            received_args = {
-                key: value for key, value in {canonical_name: canonical_value, **aliases}.items()
-            }
+            missing_received_args: dict[str, object] = {}
+            if canonical_value is not None:
+                missing_received_args[canonical_name] = canonical_value
+            for key, value in aliases.items():
+                if value is not None:
+                    missing_received_args[key] = value
             raise _validation_failure(
                 tool_name=tool_name,
                 message=f"Missing required argument: {canonical_name}",
                 expected_args=expected_args,
-                received_args=received_args,
+                received_args=missing_received_args,
                 suggested_fix=f"Provide '{canonical_name}' as a non-empty string.",
                 example_payload=example_payload,
             )
@@ -579,9 +584,7 @@ def create_server(
                 "minimal_payload_examples": {
                     "sql_query": {
                         "name": "sql_query",
-                        "arguments": {
-                            "statement": "SELECT COUNT(*) AS row_count FROM demo_assets"
-                        },
+                        "arguments": {"statement": "SELECT COUNT(*) AS row_count FROM demo_assets"},
                     },
                     "list_tables": {
                         "name": "list_tables",
@@ -845,7 +848,9 @@ def create_server(
                     "dry_run": dry_run,
                     "confirm_write_required": True,
                 },
-                suggested_fix="Set confirm_write=true to apply mutation or set dry_run=true for preview.",
+                suggested_fix=(
+                    "Set confirm_write=true to apply mutation or set dry_run=true for preview."
+                ),
                 example_payload={
                     "name": "sql_execute",
                     "arguments": {
@@ -892,7 +897,7 @@ def create_http_app(
 
     http_app = server.http_app(transport="http")
     sse_app = server.http_app(transport="sse")
-    runtime_metrics = getattr(server.state, "runtime_metrics", None)
+    runtime_metrics = getattr(getattr(server, "state", None), "runtime_metrics", None)
 
     def _session_recovery_payload(reason_code: str) -> dict[str, Any]:
         return {
@@ -929,7 +934,9 @@ def create_http_app(
         if accept_override is not None:
             filtered_headers["Accept"] = accept_override
         transport_client = httpx.ASGITransport(app=target_app)
-        async with httpx.AsyncClient(transport=transport_client, base_url="http://mcp.local") as client:
+        async with httpx.AsyncClient(
+            transport=transport_client, base_url="http://mcp.local"
+        ) as client:
             proxied = await client.request(
                 request.method,
                 target_url,
@@ -1033,7 +1040,7 @@ def create_http_app(
         if wants_json and not wants_sse:
             content_type = response.headers.get("content-type", "")
             if "text/event-stream" in content_type.lower():
-                parsed = _extract_json_from_sse(response.body)
+                parsed = _extract_json_from_sse(bytes(response.body))
                 if parsed is not None:
                     serialized = json.dumps(parsed).lower()
                     reason_code = None
@@ -1054,7 +1061,7 @@ def create_http_app(
         return response
 
     @asynccontextmanager
-    async def _auto_lifespan(_app: Starlette):
+    async def _auto_lifespan(_app: Starlette) -> AsyncIterator[None]:
         # FastMCP HTTP/SSE apps require lifespan startup to initialize their
         # internal session manager task groups.
         async with AsyncExitStack() as stack:
@@ -1067,7 +1074,7 @@ def create_http_app(
         routes=[
             Route("/mcp", endpoint=mcp_auto, methods=["POST", "GET"]),
             Mount("/", app=http_app),
-        ]
+        ],
     )
 
 
