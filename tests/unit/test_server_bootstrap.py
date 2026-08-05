@@ -490,7 +490,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     }
     capabilities = server.tools["capabilities_summary"]()
     assert capabilities["service"]["name"] == "faircom-mcp"
-    assert capabilities["service"]["version"] == "0.1.10"
+    assert capabilities["service"]["version"] == "0.1.11"
     assert capabilities["security"]["default_policy"] == "default"
     assert capabilities["security"]["read_write_enabled"] is True
     assert capabilities["security"]["diagnostics_enabled"] is False

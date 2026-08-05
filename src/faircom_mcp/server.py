@@ -1255,7 +1255,7 @@ def create_server(
             lambda: {
                 "service": {
                     "name": "faircom-mcp",
-                    "version": "0.1.10",
+                    "version": "0.1.11",
                     "compatibility": {
                         "faircom": ["Edge", "DB", "RTG", "ISAM", "MQ"],
                         "transport": ["http", "sse", "stdio"],
