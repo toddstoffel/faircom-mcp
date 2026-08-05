@@ -1623,8 +1623,10 @@ def create_http_app(
     transport: Literal["http", "sse", "auto"] = "http",
 ) -> Starlette:
     server = create_server(config, readiness_check=readiness_check)
-    if transport in {"http", "sse"}:
-        return server.http_app(transport=transport)
+    # Keep raw SSE behavior unchanged, but route HTTP through the compatibility
+    # wrapper so JSON-only clients can still negotiate with streamable HTTP.
+    if transport == "sse":
+        return server.http_app(transport="sse")
 
     http_app = server.http_app(transport="http")
     sse_app = server.http_app(transport="sse")

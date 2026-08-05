@@ -759,6 +759,31 @@ def test_create_http_app_auto_negotiates_transport(monkeypatch: object) -> None:
     assert sse_response.json() == {"transport": "sse"}
 
 
+def test_create_http_app_http_mode_uses_compat_wrapper(monkeypatch: object) -> None:
+    fake_class, server_module = _load_server_module(monkeypatch)
+    config = _config()
+    original_create_server = server_module.create_server
+    monkeypatch.setattr(
+        server_module,
+        "create_server",
+        lambda config, *, readiness_check=None: original_create_server(
+            config,
+            client_factory=lambda _config: object(),
+            readiness_check=readiness_check,
+        ),
+    )
+
+    app = server_module.create_http_app(
+        config,
+        readiness_check=lambda: True,
+        transport="http",
+    )
+
+    assert fake_class.last_instance is not None
+    assert fake_class.last_instance.http_app_calls == ["http", "sse"]
+    assert _get("/mcp", app).status_code == 200
+
+
 def test_create_server_enforces_tool_group_policy(monkeypatch: object) -> None:
     _fake_class, server_module = _load_server_module(monkeypatch)
     config = _config()
