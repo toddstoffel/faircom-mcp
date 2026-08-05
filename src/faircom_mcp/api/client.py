@@ -327,7 +327,8 @@ class FaircomAPIClient:
             hint = (
                 "Connector action failed upstream. Verify FAIRCOM_API_BASE_URL points to the "
                 "correct FairCom JSON API endpoint, confirm the authenticated account can execute "
-                "connector admin actions, and validate listInputs directly against the upstream API."
+                "connector admin actions, and validate listInputs directly against the upstream "
+                "API."
             )
 
         raise UpstreamAPIError(
