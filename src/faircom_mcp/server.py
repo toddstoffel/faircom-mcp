@@ -22,7 +22,7 @@ from faircom_mcp.api.dialect import detect_unsupported_features, normalize_selec
 from faircom_mcp.api.sql import SQLAdapter
 from faircom_mcp.api.tables import TableAdapter
 from faircom_mcp.config import AppConfig, load_config
-from faircom_mcp.errors import ValidationFailure
+from faircom_mcp.errors import FaircomError, ValidationFailure
 from faircom_mcp.observability import AuditLog, RuntimeMetrics, build_tracer, maybe_span
 
 
@@ -69,12 +69,29 @@ def create_server(
                 },
             ):
                 result = action()
-        except Exception:
+        except Exception as exc:
             metrics.record_tool_call(
                 tool=tool_name,
                 status="error",
                 duration_seconds=time.perf_counter() - started,
             )
+            if isinstance(exc, FaircomError):
+                logger.error(
+                    "Tool failed with normalized FaircomError",
+                    extra={
+                        "tool": tool_name,
+                        "group": group,
+                        "error_code": str(exc.code),
+                        "error_message": exc.message,
+                        "retryable": exc.retryable,
+                        "error_details": exc.details,
+                    },
+                )
+            else:
+                logger.exception(
+                    "Tool failed with unexpected exception",
+                    extra={"tool": tool_name, "group": group},
+                )
             raise
 
         metrics.record_tool_call(

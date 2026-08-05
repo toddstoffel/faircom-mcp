@@ -24,7 +24,24 @@ class FaircomError(Exception):
     hint: str | None = None
 
     def __str__(self) -> str:
-        return f"{self.code}: {self.message}"
+        summary = f"{self.code}: {self.message}"
+        if not self.details:
+            return summary
+
+        # Include compact, high-signal keys so transport wrappers expose actionable context.
+        important_keys = (
+            "errorCode",
+            "errorMessage",
+            "status_code",
+            "request_api",
+            "request_action",
+            "method",
+            "path",
+        )
+        parts = [f"{key}={self.details[key]!r}" for key in important_keys if key in self.details]
+        if not parts:
+            return summary
+        return f"{summary} ({', '.join(parts)})"
 
     def to_payload(self) -> dict[str, Any]:
         return {
