@@ -490,6 +490,10 @@ def create_server(
     def list_inputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool("list_inputs", "metadata", lambda: connector_adapter.list_inputs(payload))
 
+    @server.tool(name="listInputs")
+    def list_inputs_alias(payload: dict[str, object] | None = None) -> object:
+        return list_inputs(payload=payload)
+
     @server.tool(name="describe_inputs")
     def describe_inputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
@@ -497,6 +501,10 @@ def create_server(
             "metadata",
             lambda: connector_adapter.describe_inputs(payload),
         )
+
+    @server.tool(name="describeInputs")
+    def describe_inputs_alias(payload: dict[str, object] | None = None) -> object:
+        return describe_inputs(payload=payload)
 
     @server.tool(name="create_input")
     def create_input(
@@ -564,6 +572,14 @@ def create_server(
             return enriched
         return result
 
+    @server.tool(name="createInput")
+    def create_input_alias(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return create_input(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
+
     @server.tool(name="alter_input")
     def alter_input(
         payload: dict[str, object] | None = None,
@@ -629,6 +645,14 @@ def create_server(
             )
             return enriched
         return result
+
+    @server.tool(name="alterInput")
+    def alter_input_alias(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return alter_input(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
 
     @server.tool(name="delete_input")
     def delete_input(
@@ -696,6 +720,14 @@ def create_server(
             return enriched
         return result
 
+    @server.tool(name="deleteInput")
+    def delete_input_alias(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return delete_input(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
+
     @server.tool(name="list_outputs")
     def list_outputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
@@ -704,6 +736,10 @@ def create_server(
             lambda: connector_adapter.list_outputs(payload),
         )
 
+    @server.tool(name="listOutputs")
+    def list_outputs_alias(payload: dict[str, object] | None = None) -> object:
+        return list_outputs(payload=payload)
+
     @server.tool(name="describe_outputs")
     def describe_outputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
@@ -711,6 +747,10 @@ def create_server(
             "metadata",
             lambda: connector_adapter.describe_outputs(payload),
         )
+
+    @server.tool(name="describeOutputs")
+    def describe_outputs_alias(payload: dict[str, object] | None = None) -> object:
+        return describe_outputs(payload=payload)
 
     @server.tool(name="create_output")
     def create_output(
@@ -778,6 +818,14 @@ def create_server(
             return enriched
         return result
 
+    @server.tool(name="createOutput")
+    def create_output_alias(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return create_output(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
+
     @server.tool(name="alter_output")
     def alter_output(
         payload: dict[str, object] | None = None,
@@ -844,6 +892,14 @@ def create_server(
             return enriched
         return result
 
+    @server.tool(name="alterOutput")
+    def alter_output_alias(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return alter_output(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
+
     @server.tool(name="delete_output")
     def delete_output(
         payload: dict[str, object] | None = None,
@@ -909,6 +965,14 @@ def create_server(
             )
             return enriched
         return result
+
+    @server.tool(name="deleteOutput")
+    def delete_output_alias(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return delete_output(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
 
     @server.tool(name="sql_query")
     def sql_query(
@@ -1122,7 +1186,7 @@ def create_server(
             lambda: {
                 "service": {
                     "name": "faircom-mcp",
-                    "version": "0.1.5",
+                    "version": "0.1.9",
                     "compatibility": {
                         "faircom": ["Edge", "DB", "RTG", "ISAM", "MQ"],
                         "transport": ["http", "sse", "stdio"],
@@ -1222,6 +1286,7 @@ def create_server(
                     },
                     {
                         "name": "list_inputs",
+                        "aliases": ["listInputs"],
                         "group": "metadata",
                         "risk_level": "low",
                         "idempotent": True,
@@ -1232,6 +1297,7 @@ def create_server(
                     },
                     {
                         "name": "describe_inputs",
+                        "aliases": ["describeInputs"],
                         "group": "metadata",
                         "risk_level": "low",
                         "idempotent": True,
@@ -1240,6 +1306,7 @@ def create_server(
                     },
                     {
                         "name": "list_outputs",
+                        "aliases": ["listOutputs"],
                         "group": "metadata",
                         "risk_level": "low",
                         "idempotent": True,
@@ -1250,6 +1317,7 @@ def create_server(
                     },
                     {
                         "name": "describe_outputs",
+                        "aliases": ["describeOutputs"],
                         "group": "metadata",
                         "risk_level": "low",
                         "idempotent": True,
@@ -1258,6 +1326,7 @@ def create_server(
                     },
                     {
                         "name": "create_input",
+                        "aliases": ["createInput"],
                         "group": "connector",
                         "risk_level": "critical",
                         "idempotent": False,
@@ -1269,6 +1338,7 @@ def create_server(
                     },
                     {
                         "name": "alter_input",
+                        "aliases": ["alterInput"],
                         "group": "connector",
                         "risk_level": "critical",
                         "idempotent": False,
@@ -1280,6 +1350,7 @@ def create_server(
                     },
                     {
                         "name": "delete_input",
+                        "aliases": ["deleteInput"],
                         "group": "connector",
                         "risk_level": "critical",
                         "idempotent": False,
@@ -1291,6 +1362,7 @@ def create_server(
                     },
                     {
                         "name": "create_output",
+                        "aliases": ["createOutput"],
                         "group": "connector",
                         "risk_level": "critical",
                         "idempotent": False,
@@ -1302,6 +1374,7 @@ def create_server(
                     },
                     {
                         "name": "alter_output",
+                        "aliases": ["alterOutput"],
                         "group": "connector",
                         "risk_level": "critical",
                         "idempotent": False,
@@ -1313,6 +1386,7 @@ def create_server(
                     },
                     {
                         "name": "delete_output",
+                        "aliases": ["deleteOutput"],
                         "group": "connector",
                         "risk_level": "critical",
                         "idempotent": False,

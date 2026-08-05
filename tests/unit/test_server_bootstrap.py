@@ -254,15 +254,25 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "list_table_columns",
         "list_table_indexes",
         "list_inputs",
+        "listInputs",
         "describe_inputs",
+        "describeInputs",
         "create_input",
+        "createInput",
         "alter_input",
+        "alterInput",
         "delete_input",
+        "deleteInput",
         "list_outputs",
+        "listOutputs",
         "describe_outputs",
+        "describeOutputs",
         "create_output",
+        "createOutput",
         "alter_output",
+        "alterOutput",
         "delete_output",
+        "deleteOutput",
         "sql_query",
         "sql_query_page",
         "get_usage_contract",
@@ -340,6 +350,14 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "action": "describeInputs",
         "payload": {"connectorNames": ["modbus_1"]},
     }
+    assert server.tools["listInputs"](payload={"connectorNameLike": "modbus%"}) == {
+        "action": "listInputs",
+        "payload": {"connectorNameLike": "modbus%"},
+    }
+    assert server.tools["describeInputs"](payload={"connectorNames": ["modbus_1"]}) == {
+        "action": "describeInputs",
+        "payload": {"connectorNames": ["modbus_1"]},
+    }
     assert server.tools["create_input"](
         payload={"connectorName": "modbus_1"},
         confirm_write=True,
@@ -350,11 +368,29 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "confirm_write_required": True,
         "mutation_applied": True,
     }
+    assert server.tools["createInput"](
+        payload={"connectorName": "modbus_2"},
+        confirm_write=True,
+    ) == {
+        "action": "createInput",
+        "payload": {"connectorName": "modbus_2"},
+        "dry_run_applied": False,
+        "confirm_write_required": True,
+        "mutation_applied": True,
+    }
     assert server.tools["list_outputs"](payload={"connectorNameLike": "mqtt%"}) == {
         "action": "listOutputs",
         "payload": {"connectorNameLike": "mqtt%"},
     }
     assert server.tools["describe_outputs"](payload={"connectorNames": ["mqtt_1"]}) == {
+        "action": "describeOutputs",
+        "payload": {"connectorNames": ["mqtt_1"]},
+    }
+    assert server.tools["listOutputs"](payload={"connectorNameLike": "mqtt%"}) == {
+        "action": "listOutputs",
+        "payload": {"connectorNameLike": "mqtt%"},
+    }
+    assert server.tools["describeOutputs"](payload={"connectorNames": ["mqtt_1"]}) == {
         "action": "describeOutputs",
         "payload": {"connectorNames": ["mqtt_1"]},
     }
@@ -372,6 +408,25 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "preview_details": {
             "action": "createOutput",
             "target": {"connectorName": "mqtt_1"},
+            "row_estimate": "unknown",
+        },
+        "warnings": [],
+        "hint": "Review the preview above. Call with confirm_write=True to apply this change.",
+    }
+    assert server.tools["createOutput"](
+        payload={"connectorName": "mqtt_2"},
+        dry_run=True,
+    ) == {
+        "mode": "dry_run",
+        "status": "success",
+        "tool_name": "create_output",
+        "action": "createOutput",
+        "payload": {"connectorName": "mqtt_2"},
+        "would_succeed": True,
+        "preview": "Connector change would execute",
+        "preview_details": {
+            "action": "createOutput",
+            "target": {"connectorName": "mqtt_2"},
             "row_estimate": "unknown",
         },
         "warnings": [],
@@ -419,7 +474,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     }
     capabilities = server.tools["capabilities_summary"]()
     assert capabilities["service"]["name"] == "faircom-mcp"
-    assert capabilities["service"]["version"] == "0.1.5"
+    assert capabilities["service"]["version"] == "0.1.9"
     assert capabilities["security"]["default_policy"] == "default"
     assert capabilities["security"]["read_write_enabled"] is True
     assert capabilities["security"]["diagnostics_enabled"] is False
@@ -432,6 +487,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         tool["name"] == "sql_query_page" and tool["idempotent"] is True
         for tool in capabilities["tools"]
     )
+    assert any(
+        tool["name"] == "create_input" and tool.get("aliases") == ["createInput"]
+        for tool in capabilities["tools"]
+    )
     metrics_payload = server.tools["observability_metrics"]()
     assert metrics_payload["service"] == "faircom-mcp"
     assert isinstance(metrics_payload["tool_calls"], dict)
@@ -441,6 +500,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     audit_payload = server.tools["observability_audit"]()
     assert audit_payload["service"] == "faircom-mcp"
     assert [event["type"] for event in audit_payload["events"]] == [
+        "connector_write_attempt",
+        "connector_write_attempt",
         "connector_write_attempt",
         "connector_write_attempt",
     ]
@@ -505,10 +566,15 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert describe_table_calls == ["demo"]
     assert list_table_columns_calls == ["demo"]
     assert list_table_indexes_calls == ["demo"]
-    assert connector_calls[:5] == [
+    assert connector_calls == [
+        ("listInputs", {"connectorNameLike": "modbus%"}),
+        ("describeInputs", {"connectorNames": ["modbus_1"]}),
         ("listInputs", {"connectorNameLike": "modbus%"}),
         ("describeInputs", {"connectorNames": ["modbus_1"]}),
         ("createInput", {"connectorName": "modbus_1"}),
+        ("createInput", {"connectorName": "modbus_2"}),
+        ("listOutputs", {"connectorNameLike": "mqtt%"}),
+        ("describeOutputs", {"connectorNames": ["mqtt_1"]}),
         ("listOutputs", {"connectorNameLike": "mqtt%"}),
         ("describeOutputs", {"connectorNames": ["mqtt_1"]}),
     ]

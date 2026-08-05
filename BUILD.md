@@ -3,7 +3,7 @@
 This document is for maintainers who build, test, and package FairCom MCP.
 End-user install and configuration instructions are in `README.md`.
 
-> Current maintainer release target: v0.1.8. Update the package metadata and release docs together before tagging a new release.
+> Current maintainer release target: v0.1.9. Update the package metadata and release docs together before tagging a new release.
 
 ## Maintainer Prerequisites
 - Python 3.11+
@@ -253,17 +253,17 @@ After validating changes on `main`:
 Recommended:
 
 ```bash
-devtools/publish_release.sh v0.1.8
+devtools/publish_release.sh v0.1.9
 ```
 
 Script options:
 
 ```bash
 # Trigger publish but do not wait for workflow completion
-devtools/publish_release.sh v0.1.8 --no-wait
+devtools/publish_release.sh v0.1.9 --no-wait
 
 # Allow local uncommitted changes (advanced; not recommended)
-devtools/publish_release.sh v0.1.8 --allow-dirty
+devtools/publish_release.sh v0.1.9 --allow-dirty
 ```
 
 Manual fallback (equivalent trigger):
@@ -271,8 +271,8 @@ Manual fallback (equivalent trigger):
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag v0.1.8
-git push origin v0.1.8
+git tag v0.1.9
+git push origin v0.1.9
 ```
 
 ## Troubleshooting CI/CD Visibility

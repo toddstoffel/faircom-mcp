@@ -1,5 +1,5 @@
 Name:           faircom-mcp
-Version:        0.1.0
+Version:        0.1.9
 Release:        1%{?dist}
 Summary:        FairCom MCP server
 

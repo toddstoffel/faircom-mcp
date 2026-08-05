@@ -5,7 +5,7 @@
 
 Connect AI assistants and LLMs to FairCom databases with explicit write controls, Linux packaging, and operational tooling.
 
-> Current release: v0.1.8. The install examples and release automation in this repository are aligned to this version.
+> Current release: v0.1.9. The install examples and release automation in this repository are aligned to this version.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -144,13 +144,13 @@ If FairCom is running on your local host machine, use:
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt-get install -y ./faircom-mcp_0.1.8_all.deb
+sudo apt-get install -y ./faircom-mcp_0.1.9_all.deb
 sudo systemctl enable --now faircom-mcp
 ```
 
 **RHEL/Rocky/AlmaLinux:**
 ```bash
-sudo dnf install -y ./faircom-mcp-0.1.8-1.noarch.rpm
+sudo dnf install -y ./faircom-mcp-0.1.9-1.noarch.rpm
 sudo systemctl enable --now faircom-mcp
 ```
 
@@ -350,6 +350,13 @@ Read-oriented connector tools:
 - `list_outputs(payload?)`
 - `describe_outputs(payload?)`
 
+CamelCase parity aliases are also available for API-name alignment:
+
+- `listInputs(payload?)`
+- `describeInputs(payload?)`
+- `listOutputs(payload?)`
+- `describeOutputs(payload?)`
+
 Write-oriented connector tools:
 
 - `create_input(payload, confirm_write=False, dry_run=False)`
@@ -358,6 +365,15 @@ Write-oriented connector tools:
 - `create_output(payload, confirm_write=False, dry_run=False)`
 - `alter_output(payload, confirm_write=False, dry_run=False)`
 - `delete_output(payload, confirm_write=False, dry_run=False)`
+
+CamelCase parity aliases are also available for write operations:
+
+- `createInput(payload, confirm_write=False, dry_run=False)`
+- `alterInput(payload, confirm_write=False, dry_run=False)`
+- `deleteInput(payload, confirm_write=False, dry_run=False)`
+- `createOutput(payload, confirm_write=False, dry_run=False)`
+- `alterOutput(payload, confirm_write=False, dry_run=False)`
+- `deleteOutput(payload, confirm_write=False, dry_run=False)`
 
 Connector writes follow the same explicit safety model as SQL writes:
 
