@@ -171,6 +171,25 @@ def test_compatibility_matrix_sql_execute_confirmation_required(monkeypatch: obj
     assert exc.value.details["reason_code"] == "missing_write_confirmation"
 
 
+def test_compatibility_matrix_connector_confirmation_required(monkeypatch: object) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_input"](payload={"connectorName": "demo_input"})
+
+    assert exc.value.details["reason_code"] == "missing_write_confirmation"
+
+
+def test_compatibility_matrix_connector_payload_required(monkeypatch: object) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_output"](payload={})
+
+    assert exc.value.details["reason_code"] == "invalid_arguments"
+    assert exc.value.details["received_args"]["payload"] == {}
+
+
 def test_compatibility_matrix_conflicting_alias_values(monkeypatch: object) -> None:
     server = _make_server(monkeypatch)
 

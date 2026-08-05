@@ -173,3 +173,68 @@ def test_non_zero_error_code_raises_upstream_error() -> None:
         client.request_json("POST", "/api/v1/action", json_body={"action": "x"})
 
     assert exc.value.details["errorCode"] == 12025
+
+
+def test_client_accepts_direct_username_password_constructor() -> None:
+    calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read().decode("utf-8")
+        calls.append({"headers": dict(request.headers), "body": body})
+        if '"action":"createSession"' in body:
+            return _response(
+                200,
+                {
+                    "authToken": "session-token",
+                    "result": {"authToken": "session-token"},
+                    "errorCode": 0,
+                    "errorMessage": "",
+                },
+                request,
+            )
+
+        return _response(200, {"ok": True}, request)
+
+    client = FaircomAPIClient(
+        base_url="https://example.test",
+        username="user",
+        password="pass",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.post_action("listTables")
+
+    assert result == {"ok": True}
+    assert any('"action":"createSession"' in call["body"] for call in calls)
+    assert any('"authToken":"session-token"' in call["body"] for call in calls)
+
+
+def test_admin_action_uses_admin_api_surface() -> None:
+    seen_bodies: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read().decode("utf-8")
+        seen_bodies.append(body)
+        if '"action":"createSession"' in body:
+            return _response(
+                200,
+                {
+                    "authToken": "session-token",
+                    "result": {"authToken": "session-token"},
+                    "errorCode": 0,
+                    "errorMessage": "",
+                },
+                request,
+            )
+        return _response(200, {"ok": True}, request)
+
+    client = FaircomAPIClient(
+        base_url="https://example.test",
+        auth=AuthConfig(username="user", password="pass"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.admin_action("describeSessions")
+
+    assert result == {"ok": True}
+    assert any('"api":"admin"' in body for body in seen_bodies)

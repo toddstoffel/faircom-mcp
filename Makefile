@@ -12,16 +12,16 @@ typecheck:
 	python3 -m mypy src
 
 test:
-	python3 -m pytest -m "not edge_integration"
+	PYTHONPATH=src python3 -m pytest -m "not edge_integration"
 
 test-cov:
-	python3 -m pytest -m "not edge_integration" --cov=src/faircom_mcp --cov-report=term-missing
+	PYTHONPATH=src python3 -m pytest -m "not edge_integration" --cov=src/faircom_mcp --cov-report=term-missing
 
 test-integration:
-	python3 -m pytest -m "integration and not edge_integration"
+	PYTHONPATH=src python3 -m pytest -m "integration and not edge_integration"
 
 test-edge:
-	bash tests/integration/test_with_edge.sh
+	PYTHONPATH=src bash tests/integration/test_with_edge.sh
 
 container-build:
 	docker build -t faircom-mcp:local .

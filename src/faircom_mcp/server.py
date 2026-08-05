@@ -17,6 +17,7 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import Mount, Route
 
 from faircom_mcp.api.client import FaircomAPIClient, create_client
+from faircom_mcp.api.connectors import ConnectorAdapter
 from faircom_mcp.api.dialect import detect_unsupported_features, normalize_select_first_to_top
 from faircom_mcp.api.sql import SQLAdapter
 from faircom_mcp.api.tables import TableAdapter
@@ -34,6 +35,7 @@ def create_server(
     resolved_config = config or load_config()
     client = client_factory(resolved_config)
     table_adapter = TableAdapter(client)
+    connector_adapter = ConnectorAdapter(client)
     sql_adapter = SQLAdapter(client, policy=resolved_config.security.to_sql_policy())
     tool_group_policy = resolved_config.security.to_tool_group_policy()
     metrics = RuntimeMetrics()
@@ -127,6 +129,53 @@ def create_server(
             "normalized_args": normalized_args or [],
             "metadata": metadata or {},
         }
+        return payload
+
+    def _connector_preview(
+        *,
+        tool_name: str,
+        action: str,
+        payload: dict[str, object] | None,
+    ) -> dict[str, object]:
+        return {
+            "mode": "dry_run",
+            "status": "success",
+            "tool_name": tool_name,
+            "action": action,
+            "payload": payload,
+            "would_succeed": True,
+            "preview": "Connector change would execute",
+            "preview_details": {
+                "action": action,
+                "target": payload or {},
+                "row_estimate": "unknown",
+            },
+            "warnings": [],
+            "hint": "Review the preview above. Call with confirm_write=True to apply this change.",
+        }
+
+    def _require_connector_payload(
+        *,
+        tool_name: str,
+        payload: dict[str, object] | None,
+        action: str,
+    ) -> dict[str, object]:
+        if payload is None or not payload:
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="connector payload is required",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={"payload": payload, "action": action},
+                suggested_fix="Provide a non-empty connector payload object or set dry_run=true.",
+                example_payload={
+                    "name": tool_name,
+                    "arguments": {"payload": {"connectorName": "demo", "type": "input"}},
+                },
+            )
         return payload
 
     def _validate_sql_shape(tool_name: str, statement: str) -> None:
@@ -437,6 +486,430 @@ def create_server(
             ),
         )
 
+    @server.tool(name="list_inputs")
+    def list_inputs(payload: dict[str, object] | None = None) -> object:
+        return _run_tool("list_inputs", "metadata", lambda: connector_adapter.list_inputs(payload))
+
+    @server.tool(name="describe_inputs")
+    def describe_inputs(payload: dict[str, object] | None = None) -> object:
+        return _run_tool(
+            "describe_inputs",
+            "metadata",
+            lambda: connector_adapter.describe_inputs(payload),
+        )
+
+    @server.tool(name="create_input")
+    def create_input(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        resolved_payload = _require_connector_payload(
+            tool_name="create_input",
+            payload=payload,
+            action="createInput",
+        )
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={"tool": "create_input", "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "create_input",
+                "connector",
+                lambda: _connector_preview(
+                    tool_name="create_input",
+                    action="createInput",
+                    payload=resolved_payload,
+                ),
+            )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="create_input",
+                message="create_input requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": resolved_payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                ),
+                example_payload={
+                    "name": "create_input",
+                    "arguments": {"payload": {"connectorName": "demo", "type": "input"}},
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _run_tool(
+            "create_input",
+            "connector",
+            lambda: connector_adapter.create_input(resolved_payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="alter_input")
+    def alter_input(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        resolved_payload = _require_connector_payload(
+            tool_name="alter_input",
+            payload=payload,
+            action="alterInput",
+        )
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={"tool": "alter_input", "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "alter_input",
+                "connector",
+                lambda: _connector_preview(
+                    tool_name="alter_input",
+                    action="alterInput",
+                    payload=resolved_payload,
+                ),
+            )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="alter_input",
+                message="alter_input requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": resolved_payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                ),
+                example_payload={
+                    "name": "alter_input",
+                    "arguments": {"payload": {"connectorName": "demo", "type": "input"}},
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _run_tool(
+            "alter_input",
+            "connector",
+            lambda: connector_adapter.alter_input(resolved_payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="delete_input")
+    def delete_input(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        resolved_payload = _require_connector_payload(
+            tool_name="delete_input",
+            payload=payload,
+            action="deleteInput",
+        )
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={"tool": "delete_input", "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "delete_input",
+                "connector",
+                lambda: _connector_preview(
+                    tool_name="delete_input",
+                    action="deleteInput",
+                    payload=resolved_payload,
+                ),
+            )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="delete_input",
+                message="delete_input requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": resolved_payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                ),
+                example_payload={
+                    "name": "delete_input",
+                    "arguments": {"payload": {"connectorName": "demo", "type": "input"}},
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _run_tool(
+            "delete_input",
+            "connector",
+            lambda: connector_adapter.delete_input(resolved_payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="list_outputs")
+    def list_outputs(payload: dict[str, object] | None = None) -> object:
+        return _run_tool(
+            "list_outputs",
+            "metadata",
+            lambda: connector_adapter.list_outputs(payload),
+        )
+
+    @server.tool(name="describe_outputs")
+    def describe_outputs(payload: dict[str, object] | None = None) -> object:
+        return _run_tool(
+            "describe_outputs",
+            "metadata",
+            lambda: connector_adapter.describe_outputs(payload),
+        )
+
+    @server.tool(name="create_output")
+    def create_output(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        resolved_payload = _require_connector_payload(
+            tool_name="create_output",
+            payload=payload,
+            action="createOutput",
+        )
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={"tool": "create_output", "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "create_output",
+                "connector",
+                lambda: _connector_preview(
+                    tool_name="create_output",
+                    action="createOutput",
+                    payload=resolved_payload,
+                ),
+            )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="create_output",
+                message="create_output requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": resolved_payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                ),
+                example_payload={
+                    "name": "create_output",
+                    "arguments": {"payload": {"connectorName": "demo", "type": "output"}},
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _run_tool(
+            "create_output",
+            "connector",
+            lambda: connector_adapter.create_output(resolved_payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="alter_output")
+    def alter_output(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        resolved_payload = _require_connector_payload(
+            tool_name="alter_output",
+            payload=payload,
+            action="alterOutput",
+        )
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={"tool": "alter_output", "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "alter_output",
+                "connector",
+                lambda: _connector_preview(
+                    tool_name="alter_output",
+                    action="alterOutput",
+                    payload=resolved_payload,
+                ),
+            )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="alter_output",
+                message="alter_output requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": resolved_payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                ),
+                example_payload={
+                    "name": "alter_output",
+                    "arguments": {"payload": {"connectorName": "demo", "type": "output"}},
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _run_tool(
+            "alter_output",
+            "connector",
+            lambda: connector_adapter.alter_output(resolved_payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="delete_output")
+    def delete_output(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        resolved_payload = _require_connector_payload(
+            tool_name="delete_output",
+            payload=payload,
+            action="deleteOutput",
+        )
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={"tool": "delete_output", "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "delete_output",
+                "connector",
+                lambda: _connector_preview(
+                    tool_name="delete_output",
+                    action="deleteOutput",
+                    payload=resolved_payload,
+                ),
+            )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="delete_output",
+                message="delete_output requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": resolved_payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                ),
+                example_payload={
+                    "name": "delete_output",
+                    "arguments": {"payload": {"connectorName": "demo", "type": "output"}},
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _run_tool(
+            "delete_output",
+            "connector",
+            lambda: connector_adapter.delete_output(resolved_payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
     @server.tool(name="sql_query")
     def sql_query(
         statement: str | None = None,
@@ -566,6 +1039,16 @@ def create_server(
                     "list_table_columns": ["table_name"],
                     "list_table_indexes": ["table_name"],
                     "sql_execute": ["statement", "params", "confirm_write", "dry_run"],
+                    "list_inputs": ["payload"],
+                    "describe_inputs": ["payload"],
+                    "create_input": ["payload", "confirm_write", "dry_run"],
+                    "alter_input": ["payload", "confirm_write", "dry_run"],
+                    "delete_input": ["payload", "confirm_write", "dry_run"],
+                    "list_outputs": ["payload"],
+                    "describe_outputs": ["payload"],
+                    "create_output": ["payload", "confirm_write", "dry_run"],
+                    "alter_output": ["payload", "confirm_write", "dry_run"],
+                    "delete_output": ["payload", "confirm_write", "dry_run"],
                 },
                 "supported_aliases": {
                     "sql_query": {"sql": "statement", "query": "statement"},
@@ -575,6 +1058,16 @@ def create_server(
                     "list_table_columns": {"table": "table_name"},
                     "list_table_indexes": {"table": "table_name"},
                     "sql_execute": {"sql": "statement", "query": "statement"},
+                    "list_inputs": {},
+                    "describe_inputs": {},
+                    "create_input": {},
+                    "alter_input": {},
+                    "delete_input": {},
+                    "list_outputs": {},
+                    "describe_outputs": {},
+                    "create_output": {},
+                    "alter_output": {},
+                    "delete_output": {},
                 },
                 "dialect_notes": {
                     "row_limit": "Prefer TOP N and optional SKIP N.",
@@ -589,6 +1082,20 @@ def create_server(
                     "list_tables": {
                         "name": "list_tables",
                         "arguments": {"name_like": "demo_%"},
+                    },
+                    "create_input": {
+                        "name": "create_input",
+                        "arguments": {
+                            "payload": {"connectorName": "demo_input", "type": "input"},
+                            "confirm_write": True,
+                        },
+                    },
+                    "create_output": {
+                        "name": "create_output",
+                        "arguments": {
+                            "payload": {"connectorName": "demo_output", "type": "output"},
+                            "confirm_write": True,
+                        },
                     },
                 },
             },
@@ -630,6 +1137,8 @@ def create_server(
                     "tool_groups": list(resolved_config.security.tool_group_allowlist),
                     "default_policy": resolved_config.security.policy_preset or "default",
                     "read_write_enabled": "write" in resolved_config.security.tool_group_allowlist,
+                    "connector_write_enabled": "connector"
+                    in resolved_config.security.tool_group_allowlist,
                     "diagnostics_enabled": resolved_config.security.diagnostics_enabled,
                     "features": ["dry_run", "audit_logging", "policy_enforcement"],
                 },
@@ -709,6 +1218,108 @@ def create_server(
                         "description": (
                             "Execute a write statement with confirmation guardrails "
                             "and optional dry-run preview."
+                        ),
+                    },
+                    {
+                        "name": "list_inputs",
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": (
+                            "List input connectors visible to the configured access context."
+                        ),
+                    },
+                    {
+                        "name": "describe_inputs",
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Describe configured input connectors.",
+                    },
+                    {
+                        "name": "list_outputs",
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": (
+                            "List output connectors visible to the configured access context."
+                        ),
+                    },
+                    {
+                        "name": "describe_outputs",
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Describe configured output connectors.",
+                    },
+                    {
+                        "name": "create_input",
+                        "group": "connector",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": (
+                            "Create an input connector with confirmation "
+                            "guardrails and dry-run preview."
+                        ),
+                    },
+                    {
+                        "name": "alter_input",
+                        "group": "connector",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": (
+                            "Alter an input connector with confirmation "
+                            "guardrails and dry-run preview."
+                        ),
+                    },
+                    {
+                        "name": "delete_input",
+                        "group": "connector",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": (
+                            "Delete an input connector with confirmation "
+                            "guardrails and dry-run preview."
+                        ),
+                    },
+                    {
+                        "name": "create_output",
+                        "group": "connector",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": (
+                            "Create an output connector with confirmation "
+                            "guardrails and dry-run preview."
+                        ),
+                    },
+                    {
+                        "name": "alter_output",
+                        "group": "connector",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": (
+                            "Alter an output connector with confirmation "
+                            "guardrails and dry-run preview."
+                        ),
+                    },
+                    {
+                        "name": "delete_output",
+                        "group": "connector",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": (
+                            "Delete an output connector with confirmation "
+                            "guardrails and dry-run preview."
                         ),
                     },
                     {

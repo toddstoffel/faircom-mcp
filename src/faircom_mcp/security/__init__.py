@@ -8,6 +8,7 @@ DEFAULT_TOOL_GROUP_ALLOWLIST = (
     "metadata",
     "query",
     "write",
+    "connector",
     "admin",
     "diagnostics",
 )
@@ -16,7 +17,7 @@ _POLICY_PRESETS = {
     "default": DEFAULT_TOOL_GROUP_ALLOWLIST,
     "read_only": ("metadata", "query", "diagnostics"),
     "analyst": ("metadata", "query", "diagnostics"),
-    "operator": ("metadata", "query", "write", "diagnostics"),
+    "operator": ("metadata", "query", "write", "connector", "diagnostics"),
     "admin": DEFAULT_TOOL_GROUP_ALLOWLIST,
 }
 

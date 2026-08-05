@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from faircom_mcp.api.connectors import ConnectorAdapter
 from faircom_mcp.api.sql import SQLAdapter
 from faircom_mcp.api.tables import TableAdapter
 from faircom_mcp.errors import ValidationFailure
@@ -20,6 +21,14 @@ class StubClient:
         self.calls.append((action, payload))
         return {"action": action, "payload": payload}
 
+    def admin_action(
+        self,
+        action: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self.calls.append((f"admin:{action}", payload))
+        return {"action": action, "payload": payload}
+
 
 def test_table_adapter_calls_expected_actions() -> None:
     client = StubClient()
@@ -35,6 +44,45 @@ def test_table_adapter_calls_expected_actions() -> None:
     assert client.calls == [
         ("listTables", {"tableNameLike": "cust%"}),
         ("describeTables", {"tableNames": ["customers"]}),
+    ]
+
+
+def test_connector_adapter_calls_expected_admin_actions() -> None:
+    client = StubClient()
+    adapter = ConnectorAdapter(cast(Any, client))
+
+    inputs = adapter.list_inputs({"connectorNameLike": "modbus%"})
+    input_detail = adapter.describe_inputs({"connectorNames": ["modbus_1"]})
+    create_input = adapter.create_input({"connectorName": "modbus_1"})
+    alter_input = adapter.alter_input({"connectorName": "modbus_1"})
+    delete_input = adapter.delete_input({"connectorName": "modbus_1"})
+    outputs = adapter.list_outputs({"connectorNameLike": "mqtt%"})
+    output_detail = adapter.describe_outputs({"connectorNames": ["mqtt_1"]})
+    create_output = adapter.create_output({"connectorName": "mqtt_1"})
+    alter_output = adapter.alter_output({"connectorName": "mqtt_1"})
+    delete_output = adapter.delete_output({"connectorName": "mqtt_1"})
+
+    assert inputs["action"] == "listInputs"
+    assert input_detail["action"] == "describeInputs"
+    assert create_input["action"] == "createInput"
+    assert alter_input["action"] == "alterInput"
+    assert delete_input["action"] == "deleteInput"
+    assert outputs["action"] == "listOutputs"
+    assert output_detail["action"] == "describeOutputs"
+    assert create_output["action"] == "createOutput"
+    assert alter_output["action"] == "alterOutput"
+    assert delete_output["action"] == "deleteOutput"
+    assert client.calls == [
+        ("admin:listInputs", {"connectorNameLike": "modbus%"}),
+        ("admin:describeInputs", {"connectorNames": ["modbus_1"]}),
+        ("admin:createInput", {"connectorName": "modbus_1"}),
+        ("admin:alterInput", {"connectorName": "modbus_1"}),
+        ("admin:deleteInput", {"connectorName": "modbus_1"}),
+        ("admin:listOutputs", {"connectorNameLike": "mqtt%"}),
+        ("admin:describeOutputs", {"connectorNames": ["mqtt_1"]}),
+        ("admin:createOutput", {"connectorName": "mqtt_1"}),
+        ("admin:alterOutput", {"connectorName": "mqtt_1"}),
+        ("admin:deleteOutput", {"connectorName": "mqtt_1"}),
     ]
 
 

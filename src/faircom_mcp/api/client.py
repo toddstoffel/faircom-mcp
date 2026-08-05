@@ -17,17 +17,21 @@ class FaircomAPIClient:
         self,
         *,
         base_url: str,
-        auth: AuthConfig,
+        auth: AuthConfig | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        token: str | None = None,
         tls_verify: bool = True,
         timeout_seconds: float = 10.0,
         max_read_retries: int = 2,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        resolved_auth = self._resolve_auth(auth, username=username, password=password, token=token)
         self._max_read_retries = max(0, max_read_retries)
-        self._auth = auth
+        self._auth = resolved_auth
         self._session_lock = Lock()
-        self._session_auth_token: str | None = auth.token
-        client_auth, token_header = self._build_http_auth(auth)
+        self._session_auth_token: str | None = resolved_auth.token
+        client_auth, token_header = self._build_http_auth(resolved_auth)
 
         headers: dict[str, str] = {"Accept": "application/json"}
         if token_header is not None:
@@ -168,16 +172,36 @@ class FaircomAPIClient:
         *,
         path: str = "/api/v1/action",
     ) -> Any:
+        return self.json_action("db", action, payload, path=path)
+
+    def json_action(
+        self,
+        api: str,
+        action: str,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        path: str = "/api/v1/action",
+        include_auth_token: bool = True,
+    ) -> Any:
         body: dict[str, Any] = {
-            "api": "db",
+            "api": api,
             "action": action,
         }
         if payload:
             body["params"] = dict(payload)
-        auth_token = self._get_action_auth_token()
-        if auth_token:
+        auth_token = self._get_action_auth_token() if include_auth_token else None
+        if auth_token is not None:
             body["authToken"] = auth_token
         return self.request_json("POST", path, json_body=body, idempotent=False)
+
+    def admin_action(
+        self,
+        action: str,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        path: str = "/api/v1/action",
+    ) -> Any:
+        return self.json_action("admin", action, payload, path=path)
 
     @staticmethod
     def _is_retryable_read(method: str, *, idempotent: bool | None) -> bool:
@@ -197,6 +221,27 @@ class FaircomAPIClient:
             "Auth configuration is missing required credentials",
         )
 
+    @staticmethod
+    def _resolve_auth(
+        auth: AuthConfig | None,
+        *,
+        username: str | None,
+        password: str | None,
+        token: str | None,
+    ) -> AuthConfig:
+        if auth is not None:
+            return auth
+
+        if token is not None:
+            return AuthConfig(token=token)
+
+        if username is not None or password is not None:
+            return AuthConfig(username=username, password=password)
+
+        raise ConfigurationError(
+            "Auth configuration is missing required credentials",
+        )
+
     def _get_action_auth_token(self) -> str:
         if self._session_auth_token:
             return self._session_auth_token
@@ -211,20 +256,16 @@ class FaircomAPIClient:
                     "Auth configuration is missing required credentials",
                 )
 
-            payload = self.request_json(
-                "POST",
-                "/api/v1/action",
-                json_body={
-                    "api": "admin",
-                    "action": "createSession",
-                    "params": {
-                        "username": self._auth.username,
-                        "password": self._auth.password,
-                        "defaultApi": "db",
-                        "defaultDebug": "none",
-                    },
+            payload = self.json_action(
+                "admin",
+                "createSession",
+                {
+                    "username": self._auth.username,
+                    "password": self._auth.password,
+                    "defaultApi": "db",
+                    "defaultDebug": "none",
                 },
-                idempotent=False,
+                include_auth_token=False,
             )
             token = payload.get("authToken") if isinstance(payload, dict) else None
             if not token:

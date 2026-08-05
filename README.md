@@ -5,7 +5,7 @@
 
 Connect AI assistants and LLMs to FairCom databases with explicit write controls, Linux packaging, and operational tooling.
 
-> Current release: v0.1.5. The install examples and release automation in this repository are aligned to this version.
+> Current release: v0.1.7. The install examples and release automation in this repository are aligned to this version.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -144,13 +144,13 @@ If FairCom is running on your local host machine, use:
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt-get install -y ./faircom-mcp_0.1.5_all.deb
+sudo apt-get install -y ./faircom-mcp_0.1.7_all.deb
 sudo systemctl enable --now faircom-mcp
 ```
 
 **RHEL/Rocky/AlmaLinux:**
 ```bash
-sudo dnf install -y ./faircom-mcp-0.1.5-1.noarch.rpm
+sudo dnf install -y ./faircom-mcp-0.1.7-1.noarch.rpm
 sudo systemctl enable --now faircom-mcp
 ```
 
@@ -159,7 +159,7 @@ sudo systemctl enable --now faircom-mcp
 ```bash
 # Health check
 curl -fsS http://127.0.0.1:8000/health
-# Output: {"status":"healthy"}
+# Output: {"status":"ok"}
 
 # List available tables
 curl -i -X POST http://127.0.0.1:8000/mcp \
@@ -338,6 +338,64 @@ FAIRCOM_HTTP_HOST=0.0.0.0
 FAIRCOM_HTTP_PORT=8000
 
 # Optional: TLS
+
+## Connector Management
+
+FairCom MCP exposes connector inspection and lifecycle operations for FairCom Edge input and output connectors.
+
+Read-oriented connector tools:
+
+- `list_inputs(payload?)`
+- `describe_inputs(payload?)`
+- `list_outputs(payload?)`
+- `describe_outputs(payload?)`
+
+Write-oriented connector tools:
+
+- `create_input(payload, confirm_write=False, dry_run=False)`
+- `alter_input(payload, confirm_write=False, dry_run=False)`
+- `delete_input(payload, confirm_write=False, dry_run=False)`
+- `create_output(payload, confirm_write=False, dry_run=False)`
+- `alter_output(payload, confirm_write=False, dry_run=False)`
+- `delete_output(payload, confirm_write=False, dry_run=False)`
+
+Connector writes follow the same explicit safety model as SQL writes:
+
+1. Use `dry_run=True` first to preview the intended connector change.
+2. Review the returned action and target payload.
+3. Re-run with `confirm_write=True` to apply the change.
+
+Example preview:
+
+```json
+{
+  "name": "create_output",
+  "arguments": {
+    "payload": {
+      "connectorName": "mqtt_1",
+      "type": "output"
+    },
+    "dry_run": true
+  }
+}
+```
+
+Example apply:
+
+```json
+{
+  "name": "create_output",
+  "arguments": {
+    "payload": {
+      "connectorName": "mqtt_1",
+      "type": "output"
+    },
+    "confirm_write": true
+  }
+}
+```
+
+The server does not auto-discover device register maps or connector-specific address models. Supply the connector payload details required by the FairCom Edge configuration API for the connector family you are managing.
 FAIRCOM_TLS_VERIFY=true              # Set to false for self-signed certs
 
 # Optional: Safety controls

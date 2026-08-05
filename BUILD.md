@@ -3,7 +3,7 @@
 This document is for maintainers who build, test, and package FairCom MCP.
 End-user install and configuration instructions are in `README.md`.
 
-> Current maintainer release target: v0.1.5. Update the package metadata and release docs together before tagging a new release.
+> Current maintainer release target: v0.1.7. Update the package metadata and release docs together before tagging a new release.
 
 ## Maintainer Prerequisites
 - Python 3.11+
@@ -17,10 +17,23 @@ Install package + dev dependencies into local system/user Python:
 python3 -m pip install --user -e '.[dev]'
 ```
 
+If you want the repo's explicit module list first, install the root requirements file and then the editable package:
+
+```bash
+python3 -m pip install --user -r requirements.txt
+python3 -m pip install --user -e . --no-deps
+```
+
 Ensure user-level scripts are on `PATH`:
 
 ```bash
 export PATH="$(python3 -m site --user-base)/bin:$PATH"
+```
+
+If you install Ruby `fpm` with `gem install --user-install fpm`, also add the gem bin directory:
+
+```bash
+export PATH="$HOME/.gem/ruby/$(ruby -e 'print RbConfig::CONFIG["ruby_version"]')/bin:$PATH"
 ```
 
 Helper client examples for JSON-RPC session handling:
@@ -240,17 +253,17 @@ After validating changes on `main`:
 Recommended:
 
 ```bash
-devtools/publish_release.sh v0.1.5
+devtools/publish_release.sh v0.1.7
 ```
 
 Script options:
 
 ```bash
 # Trigger publish but do not wait for workflow completion
-devtools/publish_release.sh v0.1.5 --no-wait
+devtools/publish_release.sh v0.1.7 --no-wait
 
 # Allow local uncommitted changes (advanced; not recommended)
-devtools/publish_release.sh v0.1.5 --allow-dirty
+devtools/publish_release.sh v0.1.7 --allow-dirty
 ```
 
 Manual fallback (equivalent trigger):
@@ -258,8 +271,8 @@ Manual fallback (equivalent trigger):
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag v0.1.5
-git push origin v0.1.5
+git tag v0.1.7
+git push origin v0.1.7
 ```
 
 ## Troubleshooting CI/CD Visibility

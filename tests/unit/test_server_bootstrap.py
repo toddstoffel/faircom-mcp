@@ -105,6 +105,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     sql_query_calls: list[tuple[str, list[object] | None]] = []
     sql_query_page_calls: list[tuple[str, list[object] | None, int, int]] = []
     sql_execute_calls: list[tuple[str, list[object] | None]] = []
+    connector_calls: list[tuple[str, dict[str, object] | None]] = []
 
     class FakeTables:
         def list_tables(
@@ -177,6 +178,47 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
                 }
             return {"statement": statement, "params": params}
 
+    class FakeConnectors:
+        def list_inputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+            connector_calls.append(("listInputs", payload))
+            return {"action": "listInputs", "payload": payload}
+
+        def describe_inputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+            connector_calls.append(("describeInputs", payload))
+            return {"action": "describeInputs", "payload": payload}
+
+        def create_input(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("createInput", payload))
+            return {"action": "createInput", "payload": payload}
+
+        def alter_input(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("alterInput", payload))
+            return {"action": "alterInput", "payload": payload}
+
+        def delete_input(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("deleteInput", payload))
+            return {"action": "deleteInput", "payload": payload}
+
+        def list_outputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+            connector_calls.append(("listOutputs", payload))
+            return {"action": "listOutputs", "payload": payload}
+
+        def describe_outputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+            connector_calls.append(("describeOutputs", payload))
+            return {"action": "describeOutputs", "payload": payload}
+
+        def create_output(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("createOutput", payload))
+            return {"action": "createOutput", "payload": payload}
+
+        def alter_output(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("alterOutput", payload))
+            return {"action": "alterOutput", "payload": payload}
+
+        def delete_output(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("deleteOutput", payload))
+            return {"action": "deleteOutput", "payload": payload}
+
     class FakeClient:
         pass
 
@@ -185,13 +227,16 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         return FakeClient()
 
     original_table_adapter = server_module.TableAdapter
+    original_connector_adapter = server_module.ConnectorAdapter
     original_sql_adapter = server_module.SQLAdapter
     server_module.TableAdapter = lambda _client: FakeTables()
+    server_module.ConnectorAdapter = lambda _client: FakeConnectors()
     server_module.SQLAdapter = lambda _client, **_kwargs: FakeSQL()
     try:
         server = server_module.create_server(config, client_factory=client_factory)
     finally:
         server_module.TableAdapter = original_table_adapter
+        server_module.ConnectorAdapter = original_connector_adapter
         server_module.SQLAdapter = original_sql_adapter
 
     assert isinstance(server, fake_class)
@@ -208,6 +253,16 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "describe_table",
         "list_table_columns",
         "list_table_indexes",
+        "list_inputs",
+        "describe_inputs",
+        "create_input",
+        "alter_input",
+        "delete_input",
+        "list_outputs",
+        "describe_outputs",
+        "create_output",
+        "alter_output",
+        "delete_output",
         "sql_query",
         "sql_query_page",
         "get_usage_contract",
@@ -225,6 +280,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert _get("/healthz", app).json() == {"status": "ok"}
     assert _get("/ready", app).json() == {"status": "ready"}
     assert _get("/readyz", app).json() == {"status": "ready"}
+
     assert server.tools["list_tables"]() == {
         "tables": [],
         "name_like": None,
@@ -275,6 +331,53 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "metadata": {},
         },
     }
+
+    assert server.tools["list_inputs"](payload={"connectorNameLike": "modbus%"}) == {
+        "action": "listInputs",
+        "payload": {"connectorNameLike": "modbus%"},
+    }
+    assert server.tools["describe_inputs"](payload={"connectorNames": ["modbus_1"]}) == {
+        "action": "describeInputs",
+        "payload": {"connectorNames": ["modbus_1"]},
+    }
+    assert server.tools["create_input"](
+        payload={"connectorName": "modbus_1"},
+        confirm_write=True,
+    ) == {
+        "action": "createInput",
+        "payload": {"connectorName": "modbus_1"},
+        "dry_run_applied": False,
+        "confirm_write_required": True,
+        "mutation_applied": True,
+    }
+    assert server.tools["list_outputs"](payload={"connectorNameLike": "mqtt%"}) == {
+        "action": "listOutputs",
+        "payload": {"connectorNameLike": "mqtt%"},
+    }
+    assert server.tools["describe_outputs"](payload={"connectorNames": ["mqtt_1"]}) == {
+        "action": "describeOutputs",
+        "payload": {"connectorNames": ["mqtt_1"]},
+    }
+    assert server.tools["create_output"](
+        payload={"connectorName": "mqtt_1"},
+        dry_run=True,
+    ) == {
+        "mode": "dry_run",
+        "status": "success",
+        "tool_name": "create_output",
+        "action": "createOutput",
+        "payload": {"connectorName": "mqtt_1"},
+        "would_succeed": True,
+        "preview": "Connector change would execute",
+        "preview_details": {
+            "action": "createOutput",
+            "target": {"connectorName": "mqtt_1"},
+            "row_estimate": "unknown",
+        },
+        "warnings": [],
+        "hint": "Review the preview above. Call with confirm_write=True to apply this change.",
+    }
+
     assert server.tools["sql_query"](
         sql="select * from demo",
         params=[1, "two"],
@@ -310,7 +413,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert usage_contract["supported_aliases"]["sql_query"]["sql"] == "statement"
     assert server.tools["runtime_status"]() == {
         "service": "faircom-mcp",
-        "tool_group_allowlist": ["metadata", "query", "write", "admin", "diagnostics"],
+        "tool_group_allowlist": ["metadata", "query", "write", "connector", "admin", "diagnostics"],
         "metrics_enabled": True,
         "tracing_enabled": False,
     }
@@ -335,7 +438,16 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert isinstance(metrics_payload["tool_seconds_total"], dict)
     assert isinstance(metrics_payload["compatibility_events"], dict)
     assert metrics_payload["compatibility_events"]["sql_query:alias_normalized"] >= 1
-    assert server.tools["observability_audit"]() == {"service": "faircom-mcp", "events": []}
+    audit_payload = server.tools["observability_audit"]()
+    assert audit_payload["service"] == "faircom-mcp"
+    assert [event["type"] for event in audit_payload["events"]] == [
+        "connector_write_attempt",
+        "connector_write_attempt",
+    ]
+    assert {event["details"]["tool"] for event in audit_payload["events"]} == {
+        "create_input",
+        "create_output",
+    }
     assert server.tools["observability_health"]() == {
         "service": "faircom-mcp",
         "status": "ok",
@@ -393,77 +505,19 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert describe_table_calls == ["demo"]
     assert list_table_columns_calls == ["demo"]
     assert list_table_indexes_calls == ["demo"]
+    assert connector_calls[:5] == [
+        ("listInputs", {"connectorNameLike": "modbus%"}),
+        ("describeInputs", {"connectorNames": ["modbus_1"]}),
+        ("createInput", {"connectorName": "modbus_1"}),
+        ("listOutputs", {"connectorNameLike": "mqtt%"}),
+        ("describeOutputs", {"connectorNames": ["mqtt_1"]}),
+    ]
     assert sql_query_calls == [("select * from demo", [1, "two"])]
     assert sql_query_page_calls == [("select * from demo order by id", ["active"], 3, 50)]
     assert sql_execute_calls == [
         ("update demo set flag = 1", ["x"]),
         ("delete from demo where id = 1", ["x"]),
     ]
-
-
-def test_sql_query_rejects_limit_with_repair_hint(monkeypatch: object) -> None:
-    _fake_class, server_module = _load_server_module(monkeypatch)
-    config = _config()
-
-    class FakeTables:
-        def list_tables(
-            self,
-            name_like: str | None = None,
-            *,
-            database: str | None = None,
-        ) -> dict[str, object]:
-            return {"tables": [], "name_like": name_like, "database": database}
-
-        def describe_table(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name}
-
-        def list_table_columns(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "columns": []}
-
-        def list_table_indexes(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "indexes": []}
-
-    class FakeSQL:
-        def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
-            return {"statement": statement, "params": params}
-
-        def query_page(
-            self,
-            statement: str,
-            params: list[object] | None = None,
-            *,
-            page: int = 1,
-            page_size: int = 100,
-            continuation_token: str | None = None,
-            order_by: str | None = None,
-        ) -> dict[str, object]:
-            return {
-                "statement": statement,
-                "params": params,
-                "page": page,
-                "page_size": page_size,
-                "continuation_token": continuation_token,
-                "order_by": order_by,
-            }
-
-        def execute(
-            self,
-            statement: str,
-            params: list[object] | None = None,
-            *,
-            dry_run: bool = False,
-        ) -> dict[str, object]:
-            return {"statement": statement, "params": params, "dry_run": dry_run}
-
-    original_table_adapter = server_module.TableAdapter
-    original_sql_adapter = server_module.SQLAdapter
-    server_module.TableAdapter = lambda _client: FakeTables()
-    server_module.SQLAdapter = lambda _client, **_kwargs: FakeSQL()
-    try:
-        server = server_module.create_server(config, client_factory=lambda _config: object())
-    finally:
-        server_module.TableAdapter = original_table_adapter
-        server_module.SQLAdapter = original_sql_adapter
 
     with pytest.raises(ValidationFailure) as exc:
         server.tools["sql_query"](statement="select * from demo limit 1")
@@ -561,6 +615,16 @@ def test_sql_query_normalizes_select_first_to_top(monkeypatch: object) -> None:
 def test_create_http_app_honors_transport_and_readiness(monkeypatch: object) -> None:
     fake_class, server_module = _load_server_module(monkeypatch)
     config = _config()
+    original_create_server = server_module.create_server
+    monkeypatch.setattr(
+        server_module,
+        "create_server",
+        lambda config, *, readiness_check=None: original_create_server(
+            config,
+            client_factory=lambda _config: object(),
+            readiness_check=readiness_check,
+        ),
+    )
 
     app = server_module.create_http_app(
         config,
@@ -579,6 +643,16 @@ def test_create_http_app_honors_transport_and_readiness(monkeypatch: object) -> 
 def test_create_http_app_auto_negotiates_transport(monkeypatch: object) -> None:
     fake_class, server_module = _load_server_module(monkeypatch)
     config = _config()
+    original_create_server = server_module.create_server
+    monkeypatch.setattr(
+        server_module,
+        "create_server",
+        lambda config, *, readiness_check=None: original_create_server(
+            config,
+            client_factory=lambda _config: object(),
+            readiness_check=readiness_check,
+        ),
+    )
 
     app = server_module.create_http_app(
         config,
