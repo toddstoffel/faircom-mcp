@@ -29,6 +29,14 @@ class StubClient:
         self.calls.append((f"admin:{action}", payload))
         return {"action": action, "payload": payload}
 
+    def hub_action(
+        self,
+        action: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self.calls.append((f"hub:{action}", payload))
+        return {"action": action, "payload": payload}
+
 
 def test_table_adapter_calls_expected_actions() -> None:
     client = StubClient()
@@ -47,7 +55,7 @@ def test_table_adapter_calls_expected_actions() -> None:
     ]
 
 
-def test_connector_adapter_calls_expected_admin_actions() -> None:
+def test_connector_adapter_calls_expected_hub_actions() -> None:
     client = StubClient()
     adapter = ConnectorAdapter(cast(Any, client))
 
@@ -73,16 +81,16 @@ def test_connector_adapter_calls_expected_admin_actions() -> None:
     assert alter_output["action"] == "alterOutput"
     assert delete_output["action"] == "deleteOutput"
     assert client.calls == [
-        ("admin:listInputs", {"connectorNameLike": "modbus%"}),
-        ("admin:describeInputs", {"connectorNames": ["modbus_1"]}),
-        ("admin:createInput", {"connectorName": "modbus_1"}),
-        ("admin:alterInput", {"connectorName": "modbus_1"}),
-        ("admin:deleteInput", {"connectorName": "modbus_1"}),
-        ("admin:listOutputs", {"connectorNameLike": "mqtt%"}),
-        ("admin:describeOutputs", {"connectorNames": ["mqtt_1"]}),
-        ("admin:createOutput", {"connectorName": "mqtt_1"}),
-        ("admin:alterOutput", {"connectorName": "mqtt_1"}),
-        ("admin:deleteOutput", {"connectorName": "mqtt_1"}),
+        ("hub:listInputs", {"connectorNameLike": "modbus%"}),
+        ("hub:describeInputs", {"connectorNames": ["modbus_1"]}),
+        ("hub:createInput", {"connectorName": "modbus_1"}),
+        ("hub:alterInput", {"connectorName": "modbus_1"}),
+        ("hub:deleteInput", {"connectorName": "modbus_1"}),
+        ("hub:listOutputs", {"connectorNameLike": "mqtt%"}),
+        ("hub:describeOutputs", {"connectorNames": ["mqtt_1"]}),
+        ("hub:createOutput", {"connectorName": "mqtt_1"}),
+        ("hub:alterOutput", {"connectorName": "mqtt_1"}),
+        ("hub:deleteOutput", {"connectorName": "mqtt_1"}),
     ]
 
 

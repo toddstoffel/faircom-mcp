@@ -149,9 +149,17 @@ def create_server(
                 "action": action,
                 "target": payload or {},
                 "row_estimate": "unknown",
+                "upstream_validated": False,
+                "schema_validated": False,
             },
-            "warnings": [],
-            "hint": "Review the preview above. Call with confirm_write=True to apply this change.",
+            "warnings": [
+                "Dry run is a local preview only and does not call FairCom backend APIs.",
+                "Dry run does not validate connector schema fields beyond local argument checks.",
+            ],
+            "hint": (
+                "Review the preview above. Then run list_inputs/describe_inputs to verify upstream "
+                "connectivity before calling with confirm_write=True."
+            ),
         }
 
     def _require_connector_payload(
@@ -174,6 +182,27 @@ def create_server(
                 example_payload={
                     "name": tool_name,
                     "arguments": {"payload": {"connectorName": "demo", "type": "input"}},
+                },
+            )
+
+        connector_name = payload.get("connectorName")
+        if not isinstance(connector_name, str) or not connector_name.strip():
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="connectorName is required in connector payload",
+                expected_args={
+                    "payload": "object (required)",
+                    "payload.connectorName": "string (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={"payload": payload, "action": action},
+                suggested_fix="Provide payload.connectorName with a non-empty connector name.",
+                example_payload={
+                    "name": tool_name,
+                    "arguments": {
+                        "payload": {"connectorName": "modbus_sim_assets", "type": "input"}
+                    },
                 },
             )
         return payload
@@ -1186,7 +1215,7 @@ def create_server(
             lambda: {
                 "service": {
                     "name": "faircom-mcp",
-                    "version": "0.1.9",
+                    "version": "0.1.10",
                     "compatibility": {
                         "faircom": ["Edge", "DB", "RTG", "ISAM", "MQ"],
                         "transport": ["http", "sse", "stdio"],

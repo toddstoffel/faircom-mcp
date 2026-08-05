@@ -409,9 +409,17 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "action": "createOutput",
             "target": {"connectorName": "mqtt_1"},
             "row_estimate": "unknown",
+            "upstream_validated": False,
+            "schema_validated": False,
         },
-        "warnings": [],
-        "hint": "Review the preview above. Call with confirm_write=True to apply this change.",
+        "warnings": [
+            "Dry run is a local preview only and does not call FairCom backend APIs.",
+            "Dry run does not validate connector schema fields beyond local argument checks.",
+        ],
+        "hint": (
+            "Review the preview above. Then run list_inputs/describe_inputs to verify upstream "
+            "connectivity before calling with confirm_write=True."
+        ),
     }
     assert server.tools["createOutput"](
         payload={"connectorName": "mqtt_2"},
@@ -428,9 +436,17 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "action": "createOutput",
             "target": {"connectorName": "mqtt_2"},
             "row_estimate": "unknown",
+            "upstream_validated": False,
+            "schema_validated": False,
         },
-        "warnings": [],
-        "hint": "Review the preview above. Call with confirm_write=True to apply this change.",
+        "warnings": [
+            "Dry run is a local preview only and does not call FairCom backend APIs.",
+            "Dry run does not validate connector schema fields beyond local argument checks.",
+        ],
+        "hint": (
+            "Review the preview above. Then run list_inputs/describe_inputs to verify upstream "
+            "connectivity before calling with confirm_write=True."
+        ),
     }
 
     assert server.tools["sql_query"](
@@ -474,7 +490,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     }
     capabilities = server.tools["capabilities_summary"]()
     assert capabilities["service"]["name"] == "faircom-mcp"
-    assert capabilities["service"]["version"] == "0.1.9"
+    assert capabilities["service"]["version"] == "0.1.10"
     assert capabilities["security"]["default_policy"] == "default"
     assert capabilities["security"]["read_write_enabled"] is True
     assert capabilities["security"]["diagnostics_enabled"] is False

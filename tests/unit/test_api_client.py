@@ -175,6 +175,37 @@ def test_non_zero_error_code_raises_upstream_error() -> None:
     assert exc.value.details["errorCode"] == 12025
 
 
+def test_connector_application_error_adds_connector_remediation_hint() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _response(
+            200,
+            {
+                "errorCode": 12042,
+                "errorMessage": "Application error",
+                "debugInfo": {
+                    "request": {
+                        "api": "hub",
+                        "action": "listInputs",
+                    }
+                },
+            },
+            request,
+        )
+
+    client = FaircomAPIClient(
+        base_url="https://example.test",
+        auth=AuthConfig(token="tkn"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(UpstreamAPIError) as exc:
+        client.request_json("POST", "/api/v1/action", json_body={"action": "x"})
+
+    assert exc.value.details["request_action"] == "listInputs"
+    assert exc.value.details["request_api"] == "hub"
+    assert "Connector action failed upstream" in (exc.value.hint or "")
+
+
 def test_client_accepts_direct_username_password_constructor() -> None:
     calls: list[dict[str, object]] = []
 

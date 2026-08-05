@@ -70,6 +70,7 @@ class UpstreamAPIError(FaircomError):
         message: str,
         details: dict[str, Any] | None = None,
         retryable: bool = True,
+        hint: str | None = None,
     ) -> None:
         super().__init__(
             code=ErrorCode.UPSTREAM_API_ERROR,
@@ -77,7 +78,8 @@ class UpstreamAPIError(FaircomError):
             details=details or {},
             retryable=retryable,
             category="upstream_failure",
-            hint=(
+            hint=hint
+            or (
                 "The upstream FairCom service is unavailable or timed out. "
                 "Retry with backoff if appropriate."
             ),

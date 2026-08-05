@@ -203,6 +203,15 @@ class FaircomAPIClient:
     ) -> Any:
         return self.json_action("admin", action, payload, path=path)
 
+    def hub_action(
+        self,
+        action: str,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        path: str = "/api/v1/action",
+    ) -> Any:
+        return self.json_action("hub", action, payload, path=path)
+
     @staticmethod
     def _is_retryable_read(method: str, *, idempotent: bool | None) -> bool:
         if idempotent is not None:
@@ -288,6 +297,39 @@ class FaircomAPIClient:
         if error_code == 0:
             return
 
+        request_info = (
+            payload.get("debugInfo", {}).get("request")
+            if isinstance(payload.get("debugInfo"), dict)
+            else None
+        )
+        request_action: str | None = None
+        request_api: str | None = None
+        if isinstance(request_info, dict):
+            raw_action = request_info.get("action")
+            raw_api = request_info.get("api")
+            request_action = raw_action if isinstance(raw_action, str) else None
+            request_api = raw_api if isinstance(raw_api, str) else None
+
+        connector_actions = {
+            "listInputs",
+            "describeInputs",
+            "createInput",
+            "alterInput",
+            "deleteInput",
+            "listOutputs",
+            "describeOutputs",
+            "createOutput",
+            "alterOutput",
+            "deleteOutput",
+        }
+        hint: str | None = None
+        if request_action in connector_actions:
+            hint = (
+                "Connector action failed upstream. Verify FAIRCOM_API_BASE_URL points to the "
+                "correct FairCom JSON API endpoint, confirm the authenticated account can execute "
+                "connector admin actions, and validate listInputs directly against the upstream API."
+            )
+
         raise UpstreamAPIError(
             "FairCom API returned an application error",
             details={
@@ -295,11 +337,12 @@ class FaircomAPIClient:
                 "path": path,
                 "errorCode": error_code,
                 "errorMessage": payload.get("errorMessage"),
-                "request": payload.get("debugInfo", {}).get("request")
-                if isinstance(payload.get("debugInfo"), dict)
-                else None,
+                "request": request_info,
+                "request_api": request_api,
+                "request_action": request_action,
             },
             retryable=False,
+            hint=hint,
         )
 
 
