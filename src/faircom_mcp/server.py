@@ -202,7 +202,18 @@ def create_server(
                 },
             )
 
-        connector_name = payload.get("connectorName")
+        normalized_payload = dict(payload)
+        connector_name = normalized_payload.get("connectorName")
+        if (not isinstance(connector_name, str) or not connector_name.strip()) and action in {
+            "createInput",
+            "alterInput",
+            "deleteInput",
+        }:
+            input_name = normalized_payload.get("inputName")
+            if isinstance(input_name, str) and input_name.strip():
+                connector_name = input_name.strip()
+                normalized_payload["connectorName"] = connector_name
+
         if not isinstance(connector_name, str) or not connector_name.strip():
             raise _validation_failure(
                 tool_name=tool_name,
@@ -210,11 +221,15 @@ def create_server(
                 expected_args={
                     "payload": "object (required)",
                     "payload.connectorName": "string (required)",
+                    "payload.inputName": "string (accepted alias for input actions)",
                     "confirm_write": "true for non-dry-run changes",
                     "dry_run": "true to preview change",
                 },
                 received_args={"payload": payload, "action": action},
-                suggested_fix="Provide payload.connectorName with a non-empty connector name.",
+                suggested_fix=(
+                    "Provide payload.connectorName with a non-empty connector name. "
+                    "For input actions, payload.inputName is also accepted."
+                ),
                 example_payload={
                     "name": tool_name,
                     "arguments": {
@@ -222,7 +237,15 @@ def create_server(
                     },
                 },
             )
-        return payload
+
+        connector_name = connector_name.strip()
+        normalized_payload["connectorName"] = connector_name
+        if action in {"createInput", "alterInput", "deleteInput"}:
+            input_name = normalized_payload.get("inputName")
+            if not isinstance(input_name, str) or not input_name.strip():
+                normalized_payload["inputName"] = connector_name
+
+        return normalized_payload
 
     def _validate_sql_shape(tool_name: str, statement: str) -> None:
         unsupported = detect_unsupported_features(statement)

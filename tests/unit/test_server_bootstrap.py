@@ -363,7 +363,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         confirm_write=True,
     ) == {
         "action": "createInput",
-        "payload": {"connectorName": "modbus_1"},
+        "payload": {"connectorName": "modbus_1", "inputName": "modbus_1"},
         "dry_run_applied": False,
         "confirm_write_required": True,
         "mutation_applied": True,
@@ -373,7 +373,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         confirm_write=True,
     ) == {
         "action": "createInput",
-        "payload": {"connectorName": "modbus_2"},
+        "payload": {"connectorName": "modbus_2", "inputName": "modbus_2"},
         "dry_run_applied": False,
         "confirm_write_required": True,
         "mutation_applied": True,
@@ -587,8 +587,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         ("describeInputs", {"connectorNames": ["modbus_1"]}),
         ("listInputs", {"connectorNameLike": "modbus%"}),
         ("describeInputs", {"connectorNames": ["modbus_1"]}),
-        ("createInput", {"connectorName": "modbus_1"}),
-        ("createInput", {"connectorName": "modbus_2"}),
+        ("createInput", {"connectorName": "modbus_1", "inputName": "modbus_1"}),
+        ("createInput", {"connectorName": "modbus_2", "inputName": "modbus_2"}),
         ("listOutputs", {"connectorNameLike": "mqtt%"}),
         ("describeOutputs", {"connectorNames": ["mqtt_1"]}),
         ("listOutputs", {"connectorNameLike": "mqtt%"}),
