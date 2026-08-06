@@ -1,118 +1,24 @@
 from __future__ import annotations
 
-import importlib
-import sys
-import types
-from collections.abc import Callable
-
 import pytest
 
-from faircom_mcp.config import AppConfig, AuthConfig, TransportConfig
 from faircom_mcp.errors import ValidationFailure
-
-
-class _FakeFastMCP:
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self.routes: list[tuple[str, Callable[..., object]]] = []
-        self.tools: dict[str, Callable[..., object]] = {}
-
-    def custom_route(self, path: str, methods: list[str]):
-        _ = methods
-
-        def decorator(handler: Callable[..., object]) -> Callable[..., object]:
-            self.routes.append((path, handler))
-            return handler
-
-        return decorator
-
-    def tool(self, name: str | None = None, **_kwargs: object):
-        def decorator(handler: Callable[..., object]) -> Callable[..., object]:
-            self.tools[name or handler.__name__] = handler
-            return handler
-
-        return decorator
-
-
-def _load_server_module(monkeypatch: object) -> object:
-    fake_module = types.ModuleType("fastmcp")
-    fake_module.FastMCP = _FakeFastMCP
-    monkeypatch.setitem(sys.modules, "fastmcp", fake_module)
-    sys.modules.pop("faircom_mcp.server", None)
-    return importlib.import_module("faircom_mcp.server")
-
-
-def _config() -> AppConfig:
-    return AppConfig(
-        faircom_api_base_url="https://example.test/api",
-        auth=AuthConfig(token="abc123"),
-        transport=TransportConfig(host="127.0.0.1", port=8000),
-        tls_verify=True,
-    )
+from tests.helpers.server_harness import BasicFakeSQL
+from tests.helpers.server_harness import BasicFakeTables
+from tests.helpers.server_harness import create_test_config as _config
+from tests.helpers.server_harness import load_server_module
+from tests.helpers.server_harness import patched_adapters
 
 
 def _make_server(monkeypatch: object) -> object:
-    server_module = _load_server_module(monkeypatch)
+    _fake_class, server_module = load_server_module(monkeypatch)
 
-    class FakeTables:
-        def list_tables(
-            self,
-            name_like: str | None = None,
-            *,
-            database: str | None = None,
-        ) -> dict[str, object]:
-            return {"tables": [], "name_like": name_like, "database": database}
-
-        def describe_table(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "columns": []}
-
-        def list_table_columns(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "columns": []}
-
-        def list_table_indexes(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "indexes": []}
-
-    class FakeSQL:
-        def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
-            return {"statement": statement, "params": params}
-
-        def query_page(
-            self,
-            statement: str,
-            params: list[object] | None = None,
-            *,
-            page: int = 1,
-            page_size: int = 100,
-            continuation_token: str | None = None,
-            order_by: str | None = None,
-        ) -> dict[str, object]:
-            return {
-                "statement": statement,
-                "params": params,
-                "page": page,
-                "page_size": page_size,
-                "continuation_token": continuation_token,
-                "order_by": order_by,
-            }
-
-        def execute(
-            self,
-            statement: str,
-            params: list[object] | None = None,
-            *,
-            dry_run: bool = False,
-        ) -> dict[str, object]:
-            return {"statement": statement, "params": params, "dry_run": dry_run}
-
-    original_table_adapter = server_module.TableAdapter
-    original_sql_adapter = server_module.SQLAdapter
-    server_module.TableAdapter = lambda _client: FakeTables()
-    server_module.SQLAdapter = lambda _client, **_kwargs: FakeSQL()
-    try:
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+    ):
         server = server_module.create_server(_config(), client_factory=lambda _config: object())
-    finally:
-        server_module.TableAdapter = original_table_adapter
-        server_module.SQLAdapter = original_sql_adapter
     return server
 
 
@@ -190,6 +96,200 @@ def test_compatibility_matrix_connector_payload_required(monkeypatch: object) ->
     assert exc.value.details["received_args"]["payload"] == {}
 
 
+def test_compatibility_matrix_modbus_schema_validation_on_write(monkeypatch: object) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "modbus",
+                "modbusServer": "tcp://127.0.0.1:502",
+            },
+            confirm_write=True,
+        )
+
+    assert exc.value.details["reason_code"] == "invalid_arguments"
+    assert any(
+        issue["path"] == "payload.propertyMapList"
+        for issue in exc.value.details["received_args"]["validation_errors"]
+    )
+
+
+def test_compatibility_matrix_modbus_dry_run_invalid_preview(monkeypatch: object) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["create_input"](
+        payload={
+            "connectorName": "modbus_input",
+            "serviceName": "modbus",
+            "modbusServer": "tcp://127.0.0.1:502",
+        },
+        dry_run=True,
+    )
+
+    assert result["status"] == "invalid"
+    assert result["would_succeed"] is False
+    issue = next(
+        issue for issue in result["validation_errors"] if issue["path"] == "payload.propertyMapList"
+    )
+    assert issue["json_pointer"] == "/payload/propertyMapList"
+
+
+def test_compatibility_matrix_rejects_unknown_top_level_connector_keys(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "modbus",
+                "modbusServer": "tcp://127.0.0.1:502",
+                "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+                "enabled": True,
+            },
+            confirm_write=True,
+        )
+
+    validation_errors = exc.value.details["received_args"]["validation_errors"]
+    unknown_issue = next(issue for issue in validation_errors if issue["reason"] == "unknown_keys")
+    assert unknown_issue["path"] == "payload"
+    assert "enabled" in unknown_issue["unknown_keys"]
+    assert "connectorName" in unknown_issue["suggested_known_keys"]
+
+
+def test_compatibility_matrix_rejects_unknown_modbus_property_map_keys(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "modbus",
+                "modbusServer": "tcp://127.0.0.1:502",
+                "propertyMapList": [
+                    {
+                        "modbusDataAccess": "holdingregister",
+                        "offset": 10,
+                    }
+                ],
+            },
+            confirm_write=True,
+        )
+
+    validation_errors = exc.value.details["received_args"]["validation_errors"]
+    unknown_issue = next(issue for issue in validation_errors if issue["reason"] == "unknown_keys")
+    assert unknown_issue["path"] == "payload.propertyMapList[0]"
+    assert unknown_issue["json_pointer"] == "/payload/propertyMapList/0"
+    assert "offset" in unknown_issue["unknown_keys"]
+    assert "modbusDataAccess" in unknown_issue["suggested_known_keys"]
+
+
+def test_compatibility_matrix_enum_required_includes_allowed_values(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "modbus",
+                "modbusServer": "tcp://127.0.0.1:502",
+                "propertyMapList": [{}],
+            },
+            confirm_write=True,
+        )
+
+    validation_errors = exc.value.details["received_args"]["validation_errors"]
+    enum_issue = next(
+        issue
+        for issue in validation_errors
+        if issue["path"].endswith(".modbusDataAccess") and issue["reason"] == "required"
+    )
+    assert enum_issue["allowed_values"] == [
+        "holdingregister",
+        "inputregister",
+        "coil",
+        "discreteinput",
+    ]
+
+
+def test_compatibility_matrix_enum_invalid_includes_allowed_values_and_nearest_match(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "modbus",
+                "modbusServer": "tcp://127.0.0.1:502",
+                "propertyMapList": [{"modbusDataAccess": "holding_register"}],
+            },
+            confirm_write=True,
+        )
+
+    validation_errors = exc.value.details["received_args"]["validation_errors"]
+    enum_issue = next(
+        issue
+        for issue in validation_errors
+        if issue["path"].endswith(".modbusDataAccess") and issue["reason"] == "invalid_enum"
+    )
+    assert enum_issue["json_pointer"] == "/payload/propertyMapList/0/modbusDataAccess"
+    assert enum_issue["allowed_values"] == [
+        "holdingregister",
+        "inputregister",
+        "coil",
+        "discreteinput",
+    ]
+    assert enum_issue["received"] == "holding_register"
+    assert enum_issue["nearest_match"] == "holdingregister"
+    assert enum_issue["corrected_snippet"] == {
+        "propertyMapList": [{"modbusDataAccess": "holdingregister"}]
+    }
+
+
+def test_compatibility_matrix_validation_errors_include_corrected_snippet(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "modbus",
+                "modbusServer": "tcp://127.0.0.1:502",
+                "enabled": True,
+            },
+            confirm_write=True,
+        )
+
+    validation_errors = exc.value.details["received_args"]["validation_errors"]
+    unknown_issue = next(issue for issue in validation_errors if issue["reason"] == "unknown_keys")
+    property_map_issue = next(
+        issue for issue in validation_errors if issue["path"] == "payload.propertyMapList"
+    )
+
+    assert unknown_issue["corrected_snippet"] == {
+        "connectorName": "modbus_input",
+        "inputName": "modbus_input",
+        "serviceName": "modbus",
+        "modbusServer": "tcp://127.0.0.1:502",
+    }
+    assert property_map_issue["corrected_snippet"] == {
+        "serviceName": "modbus",
+        "modbusServer": "tcp://127.0.0.1:502",
+        "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+    }
+
+
 def test_compatibility_matrix_conflicting_alias_values(monkeypatch: object) -> None:
     server = _make_server(monkeypatch)
 
@@ -200,3 +300,60 @@ def test_compatibility_matrix_conflicting_alias_values(monkeypatch: object) -> N
         )
 
     assert exc.value.details["reason_code"] == "invalid_arguments"
+
+
+def test_compatibility_matrix_connector_preflight_single_valid(monkeypatch: object) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="createInput",
+        payload={
+            "connectorName": "modbus_input",
+            "serviceName": "modbus",
+            "modbusServer": "tcp://127.0.0.1:502",
+            "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+        },
+    )
+
+    assert result["mode"] == "preflight"
+    assert result["summary"] == {"total": 1, "valid": 1, "invalid": 0, "all_valid": True}
+    assert result["results"][0]["status"] == "valid"
+    assert result["results"][0]["normalized_payload"]["inputName"] == "modbus_input"
+
+
+def test_compatibility_matrix_connector_preflight_batch_mixed(monkeypatch: object) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="createInput",
+        payloads=[
+            {
+                "connectorName": "modbus_valid",
+                "serviceName": "modbus",
+                "modbusServer": "tcp://127.0.0.1:502",
+                "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+            },
+            {
+                "connectorName": "modbus_invalid",
+                "serviceName": "modbus",
+                "modbusServer": "tcp://127.0.0.1:502",
+                "propertyMapList": [{"modbusDataAccess": "holding_register"}],
+            },
+        ],
+    )
+
+    assert result["summary"] == {"total": 2, "valid": 1, "invalid": 1, "all_valid": False}
+    assert result["results"][0]["status"] == "valid"
+    assert result["results"][1]["status"] == "invalid"
+    enum_issue = next(
+        issue
+        for issue in result["results"][1]["errors"]
+        if issue["path"].endswith(".modbusDataAccess")
+    )
+    assert enum_issue["reason"] == "invalid_enum"
+    assert enum_issue["allowed_values"] == [
+        "holdingregister",
+        "inputregister",
+        "coil",
+        "discreteinput",
+    ]

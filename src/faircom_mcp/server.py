@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import difflib
 import html
 import json
 import logging
+import re
 import time
 import types
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired, Required, TypedDict
 
 import httpx
 from fastmcp import FastMCP
@@ -24,6 +26,102 @@ from faircom_mcp.api.tables import TableAdapter
 from faircom_mcp.config import AppConfig, load_config
 from faircom_mcp.errors import FaircomError, ValidationFailure
 from faircom_mcp.observability import AuditLog, RuntimeMetrics, build_tracer, maybe_span
+
+
+_MODBUS_DATA_ACCESS_ENUM = [
+    "holdingregister",
+    "inputregister",
+    "coil",
+    "discreteinput",
+]
+
+
+class ModbusPropertyMapItem(TypedDict, total=False):
+    modbusDataAccess: Required[Literal["holdingregister", "inputregister", "coil", "discreteinput"]]
+    modbusDataType: str
+    modbusDataLen: int | float
+
+
+class ModbusConnectorPayload(TypedDict, total=False):
+    connectorName: Required[str]
+    serviceName: Required[Literal["modbus"]]
+    modbusServer: Required[str]
+    propertyMapList: Required[list[ModbusPropertyMapItem]]
+    inputName: str
+
+
+class MqttConnectorPayload(TypedDict, total=False):
+    connectorName: Required[str]
+    serviceName: Required[Literal["mqtt"]]
+    inputName: str
+    topic: str
+
+
+class GenericConnectorPayload(TypedDict, total=False):
+    connectorName: Required[str]
+    inputName: str
+    serviceName: str
+
+
+ConnectorPayload = ModbusConnectorPayload | MqttConnectorPayload | GenericConnectorPayload
+ConnectorPayloadBatch = list[ConnectorPayload]
+
+_CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
+    "modbus": {
+        "service_name": "modbus",
+        "required": ["connectorName", "serviceName", "modbusServer", "propertyMapList"],
+        "description": "Modbus connector payload schema (local validation profile).",
+        "properties": {
+            "connectorName": {"type": "string", "minLength": 1},
+            "inputName": {"type": "string", "minLength": 1},
+            "serviceName": {"type": "string", "const": "modbus"},
+            "modbusServer": {"type": "string", "minLength": 1},
+            "propertyMapList": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": ["modbusDataAccess"],
+                    "properties": {
+                        "modbusDataAccess": {
+                            "type": "string",
+                            "enum": _MODBUS_DATA_ACCESS_ENUM,
+                        },
+                        "modbusDataType": {"type": "string"},
+                        "modbusDataLen": {"type": ["integer", "number"]},
+                    },
+                },
+            },
+        },
+        "example": {
+            "connectorName": "modbus_energy_input",
+            "inputName": "modbus_energy_input",
+            "serviceName": "modbus",
+            "modbusServer": "tcp://127.0.0.1:502",
+            "propertyMapList": [
+                {
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataType": "float32",
+                    "modbusDataLen": 2,
+                }
+            ],
+        },
+    },
+    "mqtt": {
+        "service_name": "mqtt",
+        "required": ["connectorName", "serviceName"],
+        "description": "MQTT connector payload baseline schema (local validation profile).",
+        "properties": {
+            "connectorName": {"type": "string", "minLength": 1},
+            "serviceName": {"type": "string", "const": "mqtt"},
+        },
+        "example": {
+            "connectorName": "mqtt_telemetry_input",
+            "serviceName": "mqtt",
+            "topic": "factory/line-1/telemetry",
+        },
+    },
+}
 
 
 def create_server(
@@ -152,26 +250,66 @@ def create_server(
         *,
         tool_name: str,
         action: str,
-        payload: dict[str, object] | None,
+        payload: ConnectorPayload | None,
     ) -> dict[str, object]:
+        validation = _validate_connector_schema(
+            tool_name=tool_name,
+            action=action,
+            payload=payload,
+        )
+        if validation["status"] == "invalid":
+            return {
+                "mode": "dry_run",
+                "status": "invalid",
+                "tool_name": tool_name,
+                "action": action,
+                "payload": payload,
+                "would_succeed": False,
+                "preview": "Connector payload failed local schema validation",
+                "preview_details": {
+                    "action": action,
+                    "target": payload or {},
+                    "row_estimate": "unknown",
+                    "upstream_validated": False,
+                    "schema_validated": True,
+                    "schema_status": "invalid",
+                },
+                "validation_errors": validation["errors"],
+                "warnings": [
+                    "Dry run is a local preview only and does not call FairCom backend APIs.",
+                ],
+                "hint": "Fix validation_errors and run dry_run again before confirm_write=True.",
+            }
+
+        schema_validated = validation["status"] == "validated"
+        would_succeed: bool | str = True if schema_validated else "unvalidated"
         return {
             "mode": "dry_run",
             "status": "success",
             "tool_name": tool_name,
             "action": action,
             "payload": payload,
-            "would_succeed": True,
-            "preview": "Connector change would execute",
+            "would_succeed": would_succeed,
+            "preview": (
+                "Connector change would execute" if schema_validated else "Connector change preview only"
+            ),
             "preview_details": {
                 "action": action,
                 "target": payload or {},
                 "row_estimate": "unknown",
                 "upstream_validated": False,
-                "schema_validated": False,
+                "schema_validated": schema_validated,
+                "schema_status": validation["status"],
+                "schema_service": validation["service_name"],
             },
             "warnings": [
                 "Dry run is a local preview only and does not call FairCom backend APIs.",
-                "Dry run does not validate connector schema fields beyond local argument checks.",
+                (
+                    "Dry run did not run full schema validation because no local schema profile "
+                    "matched this payload."
+                    if not schema_validated
+                    else "Dry run passed local schema validation only; upstream checks were not run."
+                ),
             ],
             "hint": (
                 "Review the preview above. Then run list_inputs/describe_inputs to verify upstream "
@@ -179,10 +317,225 @@ def create_server(
             ),
         }
 
+    def _validate_connector_schema(
+        *,
+        tool_name: str,
+        action: str,
+        payload: ConnectorPayload | None,
+    ) -> dict[str, object]:
+        _ = action
+        if not payload:
+            return {"status": "unvalidated", "service_name": None, "errors": []}
+
+        service_name_raw = payload.get("serviceName")
+        if not isinstance(service_name_raw, str) or not service_name_raw.strip():
+            return {"status": "unvalidated", "service_name": None, "errors": []}
+
+        service_name = service_name_raw.strip().lower()
+        schema = _CONNECTOR_SCHEMA_REGISTRY.get(service_name)
+        if schema is None:
+            return {"status": "unvalidated", "service_name": service_name, "errors": []}
+
+        errors: list[dict[str, object]] = []
+
+        def _to_json_pointer(path: str) -> str:
+            # Convert dot/bracket path form (payload.a[0].b) into JSON Pointer.
+            pointer_tokens: list[str] = []
+            for token in re.findall(r"[^.\[\]]+|\[\d+\]", path):
+                if token.startswith("[") and token.endswith("]"):
+                    pointer_tokens.append(token[1:-1])
+                else:
+                    pointer_tokens.append(token)
+            escaped = [part.replace("~", "~0").replace("/", "~1") for part in pointer_tokens]
+            return "/" + "/".join(escaped)
+
+        def _validation_error(
+            *,
+            path: str,
+            reason: str,
+            message: str,
+            details: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            error: dict[str, object] = {
+                "path": path,
+                "json_pointer": _to_json_pointer(path),
+                "reason": reason,
+                "message": message,
+            }
+            if details:
+                error.update(details)
+            return error
+
+        def _modbus_minimal_snippet() -> dict[str, object]:
+            return {
+                "serviceName": "modbus",
+                "modbusServer": "tcp://127.0.0.1:502",
+                "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+            }
+
+        def _enum_error(
+            *,
+            path: str,
+            message: str,
+            allowed_values: list[str],
+            reason: str,
+            received: object | None = None,
+        ) -> dict[str, object]:
+            error = _validation_error(
+                path=path,
+                reason=reason,
+                message=message,
+                details={"allowed_values": allowed_values},
+            )
+            if received is not None:
+                error["received"] = received
+                if isinstance(received, str):
+                    nearest = difflib.get_close_matches(
+                        received.strip().lower(),
+                        allowed_values,
+                        n=1,
+                        cutoff=0.6,
+                    )
+                    if nearest:
+                        error["nearest_match"] = nearest[0]
+            if path.endswith(".modbusDataAccess"):
+                selected_access = error.get("nearest_match") or allowed_values[0]
+                error["corrected_snippet"] = {
+                    "propertyMapList": [{"modbusDataAccess": selected_access}]
+                }
+            return error
+
+        known_top_level_keys: set[str] = set()
+        schema_properties = schema.get("properties")
+        if isinstance(schema_properties, dict):
+            known_top_level_keys = set(schema_properties.keys())
+
+        unknown_top_level_keys = sorted(set(payload.keys()) - known_top_level_keys)
+        if unknown_top_level_keys:
+            corrected_payload = {
+                key: payload[key] for key in payload.keys() if key in known_top_level_keys
+            }
+            errors.append(
+                _validation_error(
+                    path="payload",
+                    reason="unknown_keys",
+                    message="Payload contains unsupported keys for this connector profile",
+                    details={
+                        "unknown_keys": unknown_top_level_keys,
+                        "suggested_known_keys": sorted(known_top_level_keys),
+                        "corrected_snippet": corrected_payload,
+                    },
+                )
+            )
+
+        required_keys = schema.get("required", [])
+        if isinstance(required_keys, list):
+            for key in required_keys:
+                value = payload.get(str(key))
+                if isinstance(value, str):
+                    if not value.strip():
+                        errors.append(
+                            _validation_error(
+                                path=f"payload.{key}",
+                                reason="required",
+                                message=f"{key} is required and must be non-empty",
+                            )
+                        )
+                elif value is None:
+                    details: dict[str, object] = {}
+                    if service_name == "modbus":
+                        details["corrected_snippet"] = _modbus_minimal_snippet()
+                    errors.append(
+                        _validation_error(
+                            path=f"payload.{key}",
+                            reason="required",
+                            message=f"{key} is required",
+                            details=details,
+                        )
+                    )
+
+        if service_name == "modbus":
+            property_map_list = payload.get("propertyMapList")
+            if not isinstance(property_map_list, list) or not property_map_list:
+                errors.append(
+                    _validation_error(
+                        path="payload.propertyMapList",
+                        reason="invalid_type",
+                        message="propertyMapList must be a non-empty array",
+                        details={
+                            "expected": "array",
+                            "received": type(property_map_list).__name__,
+                            "corrected_snippet": {
+                                "propertyMapList": [{"modbusDataAccess": "holdingregister"}]
+                            },
+                        },
+                    )
+                )
+            else:
+                for index, entry in enumerate(property_map_list):
+                    if not isinstance(entry, dict):
+                        errors.append(
+                            _validation_error(
+                                path=f"payload.propertyMapList[{index}]",
+                                reason="invalid_type",
+                                message="Each property map item must be an object",
+                                details={
+                                    "expected": "object",
+                                    "received": type(entry).__name__,
+                                },
+                            )
+                        )
+                        continue
+
+                    known_property_map_keys = {
+                        "modbusDataAccess",
+                        "modbusDataType",
+                        "modbusDataLen",
+                    }
+                    unknown_property_map_keys = sorted(
+                        set(entry.keys()) - known_property_map_keys
+                    )
+                    if unknown_property_map_keys:
+                        errors.append(
+                            _validation_error(
+                                path=f"payload.propertyMapList[{index}]",
+                                reason="unknown_keys",
+                                message="Property map item contains unsupported keys for modbus profile",
+                                details={
+                                    "unknown_keys": unknown_property_map_keys,
+                                    "suggested_known_keys": sorted(known_property_map_keys),
+                                },
+                            )
+                        )
+
+                    access = entry.get("modbusDataAccess")
+                    if not isinstance(access, str) or not access.strip():
+                        errors.append(
+                            _enum_error(
+                                path=f"payload.propertyMapList[{index}].modbusDataAccess",
+                                reason="required",
+                                message="modbusDataAccess is required",
+                                allowed_values=_MODBUS_DATA_ACCESS_ENUM,
+                            )
+                        )
+                    elif access.strip().lower() not in _MODBUS_DATA_ACCESS_ENUM:
+                        errors.append(
+                            _enum_error(
+                                path=f"payload.propertyMapList[{index}].modbusDataAccess",
+                                reason="invalid_enum",
+                                message="modbusDataAccess must be one of the allowed values",
+                                allowed_values=_MODBUS_DATA_ACCESS_ENUM,
+                                received=access,
+                            )
+                        )
+
+        status = "validated" if not errors else "invalid"
+        return {"status": status, "service_name": service_name, "errors": errors}
+
     def _require_connector_payload(
         *,
         tool_name: str,
-        payload: dict[str, object] | None,
+        payload: ConnectorPayload | None,
         action: str,
     ) -> dict[str, object]:
         if payload is None or not payload:
@@ -244,6 +597,35 @@ def create_server(
             input_name = normalized_payload.get("inputName")
             if not isinstance(input_name, str) or not input_name.strip():
                 normalized_payload["inputName"] = connector_name
+
+        validation = _validate_connector_schema(
+            tool_name=tool_name,
+            action=action,
+            payload=normalized_payload,
+        )
+        if validation["status"] == "invalid":
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="connector payload failed local schema validation",
+                expected_args={
+                    "payload": "object (required)",
+                    "payload.serviceName": "string (recommended for schema validation)",
+                },
+                received_args={
+                    "payload": normalized_payload,
+                    "action": action,
+                    "schema_service": validation["service_name"],
+                    "validation_errors": validation["errors"],
+                },
+                suggested_fix=(
+                    "Correct the fields listed in validation_errors and retry. "
+                    "Use describe_connector_schema(service_name=...) for a known-good payload shape."
+                ),
+                example_payload={
+                    "name": "describe_connector_schema",
+                    "arguments": {"service_name": str(validation["service_name"] or "modbus")},
+                },
+            )
 
         return normalized_payload
 
@@ -577,15 +959,10 @@ def create_server(
 
     @server.tool(name="create_input")
     def create_input(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
-        resolved_payload = _require_connector_payload(
-            tool_name="create_input",
-            payload=payload,
-            action="createInput",
-        )
         audit_log.record(
             event_type="connector_write_attempt",
             details={"tool": "create_input", "dry_run": dry_run, "confirm_write": confirm_write},
@@ -597,9 +974,14 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="create_input",
                     action="createInput",
-                    payload=resolved_payload,
+                    payload=payload,
                 ),
             )
+        resolved_payload = _require_connector_payload(
+            tool_name="create_input",
+            payload=payload,
+            action="createInput",
+        )
         if not confirm_write:
             raise _validation_failure(
                 tool_name="create_input",
@@ -643,7 +1025,7 @@ def create_server(
 
     @server.tool(name="createInput")
     def create_input_alias(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -651,15 +1033,10 @@ def create_server(
 
     @server.tool(name="alter_input")
     def alter_input(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
-        resolved_payload = _require_connector_payload(
-            tool_name="alter_input",
-            payload=payload,
-            action="alterInput",
-        )
         audit_log.record(
             event_type="connector_write_attempt",
             details={"tool": "alter_input", "dry_run": dry_run, "confirm_write": confirm_write},
@@ -671,9 +1048,14 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="alter_input",
                     action="alterInput",
-                    payload=resolved_payload,
+                    payload=payload,
                 ),
             )
+        resolved_payload = _require_connector_payload(
+            tool_name="alter_input",
+            payload=payload,
+            action="alterInput",
+        )
         if not confirm_write:
             raise _validation_failure(
                 tool_name="alter_input",
@@ -717,7 +1099,7 @@ def create_server(
 
     @server.tool(name="alterInput")
     def alter_input_alias(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -725,15 +1107,10 @@ def create_server(
 
     @server.tool(name="delete_input")
     def delete_input(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
-        resolved_payload = _require_connector_payload(
-            tool_name="delete_input",
-            payload=payload,
-            action="deleteInput",
-        )
         audit_log.record(
             event_type="connector_write_attempt",
             details={"tool": "delete_input", "dry_run": dry_run, "confirm_write": confirm_write},
@@ -745,9 +1122,14 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="delete_input",
                     action="deleteInput",
-                    payload=resolved_payload,
+                    payload=payload,
                 ),
             )
+        resolved_payload = _require_connector_payload(
+            tool_name="delete_input",
+            payload=payload,
+            action="deleteInput",
+        )
         if not confirm_write:
             raise _validation_failure(
                 tool_name="delete_input",
@@ -791,7 +1173,7 @@ def create_server(
 
     @server.tool(name="deleteInput")
     def delete_input_alias(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -823,15 +1205,10 @@ def create_server(
 
     @server.tool(name="create_output")
     def create_output(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
-        resolved_payload = _require_connector_payload(
-            tool_name="create_output",
-            payload=payload,
-            action="createOutput",
-        )
         audit_log.record(
             event_type="connector_write_attempt",
             details={"tool": "create_output", "dry_run": dry_run, "confirm_write": confirm_write},
@@ -843,9 +1220,14 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="create_output",
                     action="createOutput",
-                    payload=resolved_payload,
+                    payload=payload,
                 ),
             )
+        resolved_payload = _require_connector_payload(
+            tool_name="create_output",
+            payload=payload,
+            action="createOutput",
+        )
         if not confirm_write:
             raise _validation_failure(
                 tool_name="create_output",
@@ -889,7 +1271,7 @@ def create_server(
 
     @server.tool(name="createOutput")
     def create_output_alias(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -897,15 +1279,10 @@ def create_server(
 
     @server.tool(name="alter_output")
     def alter_output(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
-        resolved_payload = _require_connector_payload(
-            tool_name="alter_output",
-            payload=payload,
-            action="alterOutput",
-        )
         audit_log.record(
             event_type="connector_write_attempt",
             details={"tool": "alter_output", "dry_run": dry_run, "confirm_write": confirm_write},
@@ -917,9 +1294,14 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="alter_output",
                     action="alterOutput",
-                    payload=resolved_payload,
+                    payload=payload,
                 ),
             )
+        resolved_payload = _require_connector_payload(
+            tool_name="alter_output",
+            payload=payload,
+            action="alterOutput",
+        )
         if not confirm_write:
             raise _validation_failure(
                 tool_name="alter_output",
@@ -963,7 +1345,7 @@ def create_server(
 
     @server.tool(name="alterOutput")
     def alter_output_alias(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -971,15 +1353,10 @@ def create_server(
 
     @server.tool(name="delete_output")
     def delete_output(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
-        resolved_payload = _require_connector_payload(
-            tool_name="delete_output",
-            payload=payload,
-            action="deleteOutput",
-        )
         audit_log.record(
             event_type="connector_write_attempt",
             details={"tool": "delete_output", "dry_run": dry_run, "confirm_write": confirm_write},
@@ -991,9 +1368,14 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="delete_output",
                     action="deleteOutput",
-                    payload=resolved_payload,
+                    payload=payload,
                 ),
             )
+        resolved_payload = _require_connector_payload(
+            tool_name="delete_output",
+            payload=payload,
+            action="deleteOutput",
+        )
         if not confirm_write:
             raise _validation_failure(
                 tool_name="delete_output",
@@ -1037,7 +1419,7 @@ def create_server(
 
     @server.tool(name="deleteOutput")
     def delete_output_alias(
-        payload: dict[str, object] | None = None,
+        payload: ConnectorPayload | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1138,12 +1520,57 @@ def create_server(
 
     @server.tool(name="get_usage_contract")
     def get_usage_contract() -> object:
+        def _extract_enums_from_schema(
+            schema_node: dict[str, object],
+            *,
+            path: str = "payload",
+        ) -> dict[str, list[str]]:
+            enum_map: dict[str, list[str]] = {}
+            properties = schema_node.get("properties")
+            if isinstance(properties, dict):
+                for key, child in properties.items():
+                    if not isinstance(child, dict):
+                        continue
+                    child_path = f"{path}.{key}"
+                    enum_values = child.get("enum")
+                    if isinstance(enum_values, list) and all(
+                        isinstance(v, str) for v in enum_values
+                    ):
+                        enum_map[child_path] = [str(v) for v in enum_values]
+
+                    child_type = child.get("type")
+                    if child_type == "object":
+                        enum_map.update(_extract_enums_from_schema(child, path=child_path))
+                    elif child_type == "array":
+                        items = child.get("items")
+                        if isinstance(items, dict):
+                            enum_map.update(
+                                _extract_enums_from_schema(
+                                    items,
+                                    path=f"{child_path}[]",
+                                )
+                            )
+            return enum_map
+
+        connector_contract_profiles: dict[str, dict[str, object]] = {}
+        for service_name, schema in _CONNECTOR_SCHEMA_REGISTRY.items():
+            required = schema.get("required")
+            required_keys = [str(v) for v in required] if isinstance(required, list) else []
+            enums = _extract_enums_from_schema(schema)
+            connector_contract_profiles[service_name] = {
+                "service_name": service_name,
+                "required_keys": required_keys,
+                "enum_values": enums,
+                "schema": schema,
+                "known_good_example": schema.get("example"),
+            }
+
         return _run_tool(
             "get_usage_contract",
             "admin",
             lambda: {
-                "contract_version": "2026-07-28",
-                "updated_at": "2026-07-28",
+                "contract_version": "2026-08-05",
+                "updated_at": "2026-08-05",
                 "required_call_order": ["initialize", "tools/list", "tools/call"],
                 "session_requirements": {
                     "required": True,
@@ -1182,6 +1609,8 @@ def create_server(
                     "create_output": ["payload", "confirm_write", "dry_run"],
                     "alter_output": ["payload", "confirm_write", "dry_run"],
                     "delete_output": ["payload", "confirm_write", "dry_run"],
+                    "describe_connector_schema": ["service_name"],
+                    "validate_connector_payloads": ["action", "payload", "payloads"],
                 },
                 "supported_aliases": {
                     "sql_query": {"sql": "statement", "query": "statement"},
@@ -1201,6 +1630,8 @@ def create_server(
                     "create_output": {},
                     "alter_output": {},
                     "delete_output": {},
+                    "describe_connector_schema": {},
+                    "validate_connector_payloads": {},
                 },
                 "dialect_notes": {
                     "row_limit": "Prefer TOP N and optional SKIP N.",
@@ -1219,20 +1650,281 @@ def create_server(
                     "create_input": {
                         "name": "create_input",
                         "arguments": {
-                            "payload": {"connectorName": "demo_input", "type": "input"},
+                            "payload": {
+                                "connectorName": "modbus_energy_input",
+                                "inputName": "modbus_energy_input",
+                                "serviceName": "modbus",
+                                "modbusServer": "tcp://127.0.0.1:502",
+                                "propertyMapList": [
+                                    {
+                                        "modbusDataAccess": "holdingregister",
+                                        "modbusDataType": "float32",
+                                        "modbusDataLen": 2,
+                                    }
+                                ],
+                            },
                             "confirm_write": True,
                         },
                     },
                     "create_output": {
                         "name": "create_output",
                         "arguments": {
-                            "payload": {"connectorName": "demo_output", "type": "output"},
+                            "payload": {
+                                "connectorName": "mqtt_telemetry_output",
+                                "serviceName": "mqtt",
+                            },
                             "confirm_write": True,
                         },
                     },
+                    "describe_connector_schema": {
+                        "name": "describe_connector_schema",
+                        "arguments": {"service_name": "modbus"},
+                    },
+                    "validate_connector_payloads": {
+                        "name": "validate_connector_payloads",
+                        "arguments": {
+                            "action": "createInput",
+                            "payloads": [
+                                {
+                                    "connectorName": "modbus_energy_input",
+                                    "serviceName": "modbus",
+                                    "modbusServer": "tcp://127.0.0.1:502",
+                                    "propertyMapList": [
+                                        {
+                                            "modbusDataAccess": "holdingregister",
+                                            "modbusDataType": "float32",
+                                            "modbusDataLen": 2,
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    },
                 },
+                "example_validity": {
+                    "sql_query": "complete",
+                    "list_tables": "complete",
+                    "create_input": "complete",
+                    "create_output": "complete",
+                    "describe_connector_schema": "complete",
+                    "validate_connector_payloads": "complete",
+                },
+                "connector_payload_profiles": connector_contract_profiles,
+                "connector_schema_profiles": sorted(_CONNECTOR_SCHEMA_REGISTRY.keys()),
             },
         )
+
+    @server.tool(name="describe_connector_schema")
+    def describe_connector_schema(service_name: str) -> object:
+        normalized = service_name.strip().lower()
+        schema = _CONNECTOR_SCHEMA_REGISTRY.get(normalized)
+        if schema is None:
+            raise _validation_failure(
+                tool_name="describe_connector_schema",
+                message="Unsupported connector service_name",
+                expected_args={
+                    "service_name": f"one of {sorted(_CONNECTOR_SCHEMA_REGISTRY.keys())}",
+                },
+                received_args={"service_name": service_name},
+                suggested_fix="Call with a supported connector profile name.",
+                example_payload={
+                    "name": "describe_connector_schema",
+                    "arguments": {"service_name": "modbus"},
+                },
+            )
+
+        return _run_tool(
+            "describe_connector_schema",
+            "admin",
+            lambda: {
+                "service_name": normalized,
+                "schema_version": "2026-08-05",
+                "schema": schema,
+                "known_good_example": schema.get("example"),
+            },
+        )
+
+    @server.tool(name="validate_connector_payloads")
+    def validate_connector_payloads(
+        action: Literal[
+            "createInput",
+            "alterInput",
+            "deleteInput",
+            "createOutput",
+            "alterOutput",
+            "deleteOutput",
+        ] = "createInput",
+        payload: ConnectorPayload | None = None,
+        payloads: ConnectorPayloadBatch | None = None,
+    ) -> object:
+        if payload is not None and payloads is not None:
+            raise _validation_failure(
+                tool_name="validate_connector_payloads",
+                message="Provide either payload or payloads, but not both",
+                expected_args={
+                    "action": (
+                        "one of createInput/alterInput/deleteInput/"
+                        "createOutput/alterOutput/deleteOutput"
+                    ),
+                    "payload": "object (optional, single preflight)",
+                    "payloads": "array<object> (optional, batch preflight)",
+                },
+                received_args={"action": action, "payload": payload, "payloads": payloads},
+                suggested_fix="Send exactly one of payload or payloads.",
+                example_payload={
+                    "name": "validate_connector_payloads",
+                    "arguments": {
+                        "action": "createInput",
+                        "payload": {
+                            "connectorName": "modbus_energy_input",
+                            "serviceName": "modbus",
+                            "modbusServer": "tcp://127.0.0.1:502",
+                            "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+                        },
+                    },
+                },
+            )
+
+        if payload is None and payloads is None:
+            raise _validation_failure(
+                tool_name="validate_connector_payloads",
+                message="payload or payloads is required",
+                expected_args={
+                    "action": (
+                        "one of createInput/alterInput/deleteInput/"
+                        "createOutput/alterOutput/deleteOutput"
+                    ),
+                    "payload": "object (optional, single preflight)",
+                    "payloads": "array<object> (optional, batch preflight)",
+                },
+                received_args={"action": action, "payload": payload, "payloads": payloads},
+                suggested_fix="Provide one payload object or a list of payload objects.",
+                example_payload={
+                    "name": "validate_connector_payloads",
+                    "arguments": {
+                        "action": "createInput",
+                        "payloads": [
+                            {
+                                "connectorName": "modbus_energy_input",
+                                "serviceName": "modbus",
+                                "modbusServer": "tcp://127.0.0.1:502",
+                                "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+                            }
+                        ],
+                    },
+                },
+            )
+
+        if payloads is not None and not isinstance(payloads, list):
+            raise _validation_failure(
+                tool_name="validate_connector_payloads",
+                message="payloads must be an array when provided",
+                expected_args={"payloads": "array<object>"},
+                received_args={"payloads": payloads},
+                suggested_fix="Wrap payload objects in a JSON array for batch validation.",
+                example_payload={
+                    "name": "validate_connector_payloads",
+                    "arguments": {
+                        "payloads": [
+                            {
+                                "connectorName": "modbus_energy_input",
+                                "serviceName": "modbus",
+                                "modbusServer": "tcp://127.0.0.1:502",
+                                "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+                            }
+                        ]
+                    },
+                },
+            )
+
+        items: list[ConnectorPayload] = payloads if payloads is not None else [payload]  # type: ignore[list-item]
+
+        def _run_preflight() -> dict[str, object]:
+            results: list[dict[str, object]] = []
+            valid_count = 0
+            invalid_count = 0
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    invalid_count += 1
+                    results.append(
+                        {
+                            "index": index,
+                            "status": "invalid",
+                            "action": action,
+                            "errors": [
+                                {
+                                    "path": "payload",
+                                    "json_pointer": "/payload",
+                                    "reason": "invalid_type",
+                                    "message": "Payload must be an object",
+                                    "expected": "object",
+                                    "received": type(item).__name__,
+                                }
+                            ],
+                        }
+                    )
+                    continue
+
+                try:
+                    normalized_payload = _require_connector_payload(
+                        tool_name="validate_connector_payloads",
+                        payload=item,
+                        action=action,
+                    )
+                except ValidationFailure as exc:
+                    invalid_count += 1
+                    received_args = exc.details.get("received_args", {})
+                    validation_errors = received_args.get("validation_errors")
+                    if not isinstance(validation_errors, list) or not validation_errors:
+                        validation_errors = [
+                            {
+                                "path": "payload",
+                                "json_pointer": "/payload",
+                                "reason": "invalid_arguments",
+                                "message": str(exc.message),
+                            }
+                        ]
+
+                    results.append(
+                        {
+                            "index": index,
+                            "status": "invalid",
+                            "action": action,
+                            "errors": validation_errors,
+                        }
+                    )
+                    continue
+
+                valid_count += 1
+                validation = _validate_connector_schema(
+                    tool_name="validate_connector_payloads",
+                    action=action,
+                    payload=normalized_payload,
+                )
+                results.append(
+                    {
+                        "index": index,
+                        "status": "valid",
+                        "action": action,
+                        "schema_service": validation["service_name"],
+                        "normalized_payload": normalized_payload,
+                        "errors": [],
+                    }
+                )
+
+            return {
+                "mode": "preflight",
+                "action": action,
+                "summary": {
+                    "total": len(items),
+                    "valid": valid_count,
+                    "invalid": invalid_count,
+                    "all_valid": invalid_count == 0,
+                },
+                "results": results,
+            }
+
+        return _run_tool("validate_connector_payloads", "admin", _run_preflight)
 
     @server.tool(name="runtime_status")
     def runtime_status() -> object:
@@ -1340,6 +2032,28 @@ def create_server(
                         "description": (
                             "Return canonical argument keys, aliases, transport notes, and minimal "
                             "payload examples for AI client bootstrap and self-repair."
+                        ),
+                    },
+                    {
+                        "name": "describe_connector_schema",
+                        "group": "admin",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": (
+                            "Return local connector payload schema profiles and known-good examples "
+                            "for supported connector services."
+                        ),
+                    },
+                    {
+                        "name": "validate_connector_payloads",
+                        "group": "admin",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": (
+                            "Preflight validate one or many connector payloads and return "
+                            "deterministic per-item diagnostics without mutating backend state."
                         ),
                     },
                     {

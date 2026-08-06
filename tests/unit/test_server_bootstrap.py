@@ -1,97 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-import importlib
-import sys
-import types
-from collections.abc import Callable
-
-import httpx
 import pytest
 
-from faircom_mcp.config import AppConfig, AuthConfig, TransportConfig
+from faircom_mcp.config import AppConfig
 from faircom_mcp.errors import ValidationFailure
-
-
-def _get(path: str, app: object) -> httpx.Response:
-    async def _request() -> httpx.Response:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            return await client.get(path)
-
-    return asyncio.run(_request())
-
-
-def _install_fake_fastmcp(monkeypatch: object) -> type:
-    fake_module = types.ModuleType("fastmcp")
-
-    class FakeFastMCP:
-        last_instance: object | None = None
-
-        def __init__(self, name: str) -> None:
-            self.name = name
-            self.routes: list[tuple[str, Callable[..., object]]] = []
-            self.tools: dict[str, Callable[..., object]] = {}
-            self.http_app_calls: list[str] = []
-            self.state = types.SimpleNamespace()
-            FakeFastMCP.last_instance = self
-
-        def custom_route(self, path: str, methods: list[str]):
-            _ = methods
-
-            def decorator(handler: Callable[..., object]) -> Callable[..., object]:
-                self.routes.append((path, handler))
-                return handler
-
-            return decorator
-
-        def http_app(self, transport: str = "http") -> object:
-            from starlette.applications import Starlette
-            from starlette.responses import JSONResponse
-            from starlette.routing import Route
-
-            self.http_app_calls.append(transport)
-            routes = [
-                Route(
-                    "/mcp",
-                    endpoint=lambda _request: JSONResponse({"transport": transport}),
-                    methods=["GET"],
-                )
-            ]
-            for path, handler in self.routes:
-                routes.append(Route(path, endpoint=handler, methods=["GET"]))
-            return Starlette(routes=routes)
-
-        def tool(self, name: str | None = None, **_kwargs: object):
-            def decorator(handler: Callable[..., object]) -> Callable[..., object]:
-                tool_name = name or handler.__name__
-                self.tools[tool_name] = handler
-                return handler
-
-            return decorator
-
-        async def run_async(self, transport: str = "stdio") -> None:
-            self.http_app_calls.append(f"run:{transport}")
-
-    fake_module.FastMCP = FakeFastMCP
-    monkeypatch.setitem(sys.modules, "fastmcp", fake_module)
-    return FakeFastMCP
-
-
-def _load_server_module(monkeypatch: object) -> tuple[type, object]:
-    fake_class = _install_fake_fastmcp(monkeypatch)
-    sys.modules.pop("faircom_mcp.server", None)
-    server_module = importlib.import_module("faircom_mcp.server")
-    return fake_class, server_module
-
-
-def _config() -> AppConfig:
-    return AppConfig(
-        faircom_api_base_url="https://example.test/api",
-        auth=AuthConfig(token="abc123"),
-        transport=TransportConfig(host="127.0.0.1", port=8000),
-        tls_verify=True,
-    )
+from tests.helpers.http import get as _get
+from tests.helpers.server_harness import create_test_config as _config
+from tests.helpers.server_harness import load_server_module as _load_server_module
 
 
 def test_create_server_registers_health_routes(monkeypatch: object) -> None:
@@ -276,6 +191,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "sql_query",
         "sql_query_page",
         "get_usage_contract",
+        "describe_connector_schema",
+        "validate_connector_payloads",
         "runtime_status",
         "capabilities_summary",
         "observability_metrics",
@@ -403,18 +320,23 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "tool_name": "create_output",
         "action": "createOutput",
         "payload": {"connectorName": "mqtt_1"},
-        "would_succeed": True,
-        "preview": "Connector change would execute",
+        "would_succeed": "unvalidated",
+        "preview": "Connector change preview only",
         "preview_details": {
             "action": "createOutput",
             "target": {"connectorName": "mqtt_1"},
             "row_estimate": "unknown",
             "upstream_validated": False,
             "schema_validated": False,
+            "schema_status": "unvalidated",
+            "schema_service": None,
         },
         "warnings": [
             "Dry run is a local preview only and does not call FairCom backend APIs.",
-            "Dry run does not validate connector schema fields beyond local argument checks.",
+            (
+                "Dry run did not run full schema validation because no local schema profile "
+                "matched this payload."
+            ),
         ],
         "hint": (
             "Review the preview above. Then run list_inputs/describe_inputs to verify upstream "
@@ -430,18 +352,23 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "tool_name": "create_output",
         "action": "createOutput",
         "payload": {"connectorName": "mqtt_2"},
-        "would_succeed": True,
-        "preview": "Connector change would execute",
+        "would_succeed": "unvalidated",
+        "preview": "Connector change preview only",
         "preview_details": {
             "action": "createOutput",
             "target": {"connectorName": "mqtt_2"},
             "row_estimate": "unknown",
             "upstream_validated": False,
             "schema_validated": False,
+            "schema_status": "unvalidated",
+            "schema_service": None,
         },
         "warnings": [
             "Dry run is a local preview only and does not call FairCom backend APIs.",
-            "Dry run does not validate connector schema fields beyond local argument checks.",
+            (
+                "Dry run did not run full schema validation because no local schema profile "
+                "matched this payload."
+            ),
         ],
         "hint": (
             "Review the preview above. Then run list_inputs/describe_inputs to verify upstream "
@@ -480,8 +407,43 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         },
     }
     usage_contract = server.tools["get_usage_contract"]()
-    assert usage_contract["contract_version"] == "2026-07-28"
+    assert usage_contract["contract_version"] == "2026-08-05"
     assert usage_contract["supported_aliases"]["sql_query"]["sql"] == "statement"
+    assert usage_contract["canonical_arg_keys"]["validate_connector_payloads"] == [
+        "action",
+        "payload",
+        "payloads",
+    ]
+    create_input_example = usage_contract["minimal_payload_examples"]["create_input"]["arguments"][
+        "payload"
+    ]
+    create_output_example = usage_contract["minimal_payload_examples"]["create_output"]["arguments"][
+        "payload"
+    ]
+    assert create_input_example["inputName"] == "modbus_energy_input"
+    assert create_output_example["serviceName"] == "mqtt"
+    assert usage_contract["example_validity"]["create_input"] == "complete"
+    assert usage_contract["example_validity"]["create_output"] == "complete"
+    assert "modbus" in usage_contract["connector_payload_profiles"]
+    assert "mqtt" in usage_contract["connector_payload_profiles"]
+    assert "required_keys" in usage_contract["connector_payload_profiles"]["modbus"]
+    assert "enum_values" in usage_contract["connector_payload_profiles"]["modbus"]
+    assert "schema" in usage_contract["connector_payload_profiles"]["modbus"]
+    schema_profile = server.tools["describe_connector_schema"](service_name="modbus")
+    assert schema_profile["service_name"] == "modbus"
+    assert schema_profile["schema_version"] == "2026-08-05"
+    assert "propertyMapList" in schema_profile["schema"]["required"]
+    preflight = server.tools["validate_connector_payloads"](
+        action="createInput",
+        payload={
+            "connectorName": "modbus_energy_input",
+            "serviceName": "modbus",
+            "modbusServer": "tcp://127.0.0.1:502",
+            "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+        },
+    )
+    assert preflight["mode"] == "preflight"
+    assert preflight["summary"]["all_valid"] is True
     assert server.tools["runtime_status"]() == {
         "service": "faircom-mcp",
         "tool_group_allowlist": ["metadata", "query", "write", "connector", "admin", "diagnostics"],
@@ -505,6 +467,14 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     )
     assert any(
         tool["name"] == "create_input" and tool.get("aliases") == ["createInput"]
+        for tool in capabilities["tools"]
+    )
+    assert any(
+        tool["name"] == "describe_connector_schema" and tool["group"] == "admin"
+        for tool in capabilities["tools"]
+    )
+    assert any(
+        tool["name"] == "validate_connector_payloads" and tool["group"] == "admin"
         for tool in capabilities["tools"]
     )
     metrics_payload = server.tools["observability_metrics"]()
@@ -620,294 +590,3 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert metrics_payload_after["compatibility_events"]["sql_execute:invalid_arg_name"] >= 1
 
 
-def test_sql_query_normalizes_select_first_to_top(monkeypatch: object) -> None:
-    _fake_class, server_module = _load_server_module(monkeypatch)
-    config = _config()
-
-    class FakeTables:
-        def list_tables(
-            self,
-            name_like: str | None = None,
-            *,
-            database: str | None = None,
-        ) -> dict[str, object]:
-            return {"tables": [], "name_like": name_like, "database": database}
-
-        def describe_table(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name}
-
-        def list_table_columns(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "columns": []}
-
-        def list_table_indexes(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "indexes": []}
-
-    class FakeSQL:
-        def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
-            return {"statement": statement, "params": params}
-
-        def query_page(
-            self,
-            statement: str,
-            params: list[object] | None = None,
-            *,
-            page: int = 1,
-            page_size: int = 100,
-            continuation_token: str | None = None,
-            order_by: str | None = None,
-        ) -> dict[str, object]:
-            return {
-                "statement": statement,
-                "params": params,
-                "page": page,
-                "page_size": page_size,
-                "continuation_token": continuation_token,
-                "order_by": order_by,
-            }
-
-        def execute(
-            self,
-            statement: str,
-            params: list[object] | None = None,
-            *,
-            dry_run: bool = False,
-        ) -> dict[str, object]:
-            return {"statement": statement, "params": params, "dry_run": dry_run}
-
-    original_table_adapter = server_module.TableAdapter
-    original_sql_adapter = server_module.SQLAdapter
-    server_module.TableAdapter = lambda _client: FakeTables()
-    server_module.SQLAdapter = lambda _client, **_kwargs: FakeSQL()
-    try:
-        server = server_module.create_server(config, client_factory=lambda _config: object())
-    finally:
-        server_module.TableAdapter = original_table_adapter
-        server_module.SQLAdapter = original_sql_adapter
-
-    result = server.tools["sql_query"](
-        statement="select first 5 id, status from demo_assets order by id",
-    )
-
-    assert result["statement"] == "select TOP 5 id, status from demo_assets order by id"
-    assert result["compatibility"]["metadata"]["sql_rewrites"] == [{"from": "FIRST", "to": "TOP"}]
-    metrics_payload = server.tools["observability_metrics"]()
-    assert metrics_payload["compatibility_events"]["sql_query:sql_rewritten_first_to_top"] >= 1
-
-
-def test_create_http_app_honors_transport_and_readiness(monkeypatch: object) -> None:
-    fake_class, server_module = _load_server_module(monkeypatch)
-    config = _config()
-    original_create_server = server_module.create_server
-    monkeypatch.setattr(
-        server_module,
-        "create_server",
-        lambda config, *, readiness_check=None: original_create_server(
-            config,
-            client_factory=lambda _config: object(),
-            readiness_check=readiness_check,
-        ),
-    )
-
-    app = server_module.create_http_app(
-        config,
-        readiness_check=lambda: False,
-        transport="sse",
-    )
-
-    assert fake_class.last_instance is not None
-    assert fake_class.last_instance.http_app_calls == ["sse"]
-
-    assert _get("/readyz", app).status_code == 503
-    assert _get("/readyz", app).json() == {"status": "not_ready"}
-    assert _get("/mcp", app).json() == {"transport": "sse"}
-
-
-def test_create_http_app_auto_negotiates_transport(monkeypatch: object) -> None:
-    fake_class, server_module = _load_server_module(monkeypatch)
-    config = _config()
-    original_create_server = server_module.create_server
-    monkeypatch.setattr(
-        server_module,
-        "create_server",
-        lambda config, *, readiness_check=None: original_create_server(
-            config,
-            client_factory=lambda _config: object(),
-            readiness_check=readiness_check,
-        ),
-    )
-
-    app = server_module.create_http_app(
-        config,
-        readiness_check=lambda: True,
-        transport="auto",
-    )
-
-    assert fake_class.last_instance is not None
-    assert fake_class.last_instance.http_app_calls == ["http", "sse"]
-
-    async def _request_with_accept(accept: str) -> httpx.Response:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            return await client.get("/mcp", headers={"Accept": accept})
-
-    http_response = asyncio.run(_request_with_accept("application/json"))
-    sse_response = asyncio.run(_request_with_accept("text/event-stream"))
-
-    assert http_response.status_code == 200
-    assert sse_response.status_code == 200
-    assert http_response.json() == {"transport": "http"}
-    assert sse_response.json() == {"transport": "sse"}
-
-
-def test_create_http_app_http_mode_uses_compat_wrapper(monkeypatch: object) -> None:
-    fake_class, server_module = _load_server_module(monkeypatch)
-    config = _config()
-    original_create_server = server_module.create_server
-    monkeypatch.setattr(
-        server_module,
-        "create_server",
-        lambda config, *, readiness_check=None: original_create_server(
-            config,
-            client_factory=lambda _config: object(),
-            readiness_check=readiness_check,
-        ),
-    )
-
-    app = server_module.create_http_app(
-        config,
-        readiness_check=lambda: True,
-        transport="http",
-    )
-
-    assert fake_class.last_instance is not None
-    assert fake_class.last_instance.http_app_calls == ["http", "sse"]
-    assert _get("/mcp", app).status_code == 200
-
-
-def test_create_server_enforces_tool_group_policy(monkeypatch: object) -> None:
-    _fake_class, server_module = _load_server_module(monkeypatch)
-    config = _config()
-    config.security.tool_group_allowlist = ("metadata",)
-
-    class FakeTables:
-        def list_tables(self, name_like: str | None = None) -> dict[str, object]:
-            return {"tables": [], "name_like": name_like}
-
-        def describe_table(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name}
-
-        def list_table_columns(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "columns": []}
-
-        def list_table_indexes(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "indexes": []}
-
-    class FakeSQL:
-        def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
-            return {"statement": statement, "params": params}
-
-        def query_page(
-            self,
-            statement: str,
-            params: list[object] | None = None,
-            *,
-            page: int = 1,
-            page_size: int = 100,
-            continuation_token: str | None = None,
-            order_by: str | None = None,
-        ) -> dict[str, object]:
-            return {
-                "statement": statement,
-                "params": params,
-                "page": page,
-                "page_size": page_size,
-                "continuation_token": continuation_token,
-                "order_by": order_by,
-            }
-
-        def execute(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
-            return {"statement": statement, "params": params}
-
-    original_table_adapter = server_module.TableAdapter
-    original_sql_adapter = server_module.SQLAdapter
-    server_module.TableAdapter = lambda _client: FakeTables()
-    server_module.SQLAdapter = lambda _client, **_kwargs: FakeSQL()
-    try:
-        server = server_module.create_server(config, client_factory=lambda _config: object())
-    finally:
-        server_module.TableAdapter = original_table_adapter
-        server_module.SQLAdapter = original_sql_adapter
-
-    with pytest.raises(ValidationFailure) as exc:
-        server.tools["sql_query"](statement="select 1")
-
-    assert exc.value.details["policy"] == "tool_group_allowlist"
-
-
-def test_create_server_diagnostics_endpoints_require_token(monkeypatch: object) -> None:
-    _fake_class, server_module = _load_server_module(monkeypatch)
-    config = _config()
-    config.security.diagnostics_enabled = True
-    config.security.diagnostics_token = "diag-token"
-
-    class FakeTables:
-        def list_tables(self, name_like: str | None = None) -> dict[str, object]:
-            return {"tables": [], "name_like": name_like}
-
-        def describe_table(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name}
-
-        def list_table_columns(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "columns": []}
-
-        def list_table_indexes(self, table_name: str) -> dict[str, object]:
-            return {"table_name": table_name, "indexes": []}
-
-    class FakeSQL:
-        def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
-            return {"statement": statement, "params": params}
-
-        def query_page(
-            self,
-            statement: str,
-            params: list[object] | None = None,
-            *,
-            page: int = 1,
-            page_size: int = 100,
-            continuation_token: str | None = None,
-            order_by: str | None = None,
-        ) -> dict[str, object]:
-            return {
-                "statement": statement,
-                "params": params,
-                "page": page,
-                "page_size": page_size,
-                "continuation_token": continuation_token,
-                "order_by": order_by,
-            }
-
-        def execute(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
-            return {"statement": statement, "params": params}
-
-    original_table_adapter = server_module.TableAdapter
-    original_sql_adapter = server_module.SQLAdapter
-    server_module.TableAdapter = lambda _client: FakeTables()
-    server_module.SQLAdapter = lambda _client, **_kwargs: FakeSQL()
-    try:
-        server = server_module.create_server(config, client_factory=lambda _config: object())
-    finally:
-        server_module.TableAdapter = original_table_adapter
-        server_module.SQLAdapter = original_sql_adapter
-
-    app = server.http_app()
-    assert _get("/diagnostics/json", app).status_code == 403
-    assert _get("/diagnostics", app).status_code == 403
-
-    async def _authorized_get(path: str) -> httpx.Response:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            return await client.get(path, headers={"x-diagnostics-token": "diag-token"})
-
-    response = asyncio.run(_authorized_get("/diagnostics/json"))
-    assert response.status_code == 200
-    assert response.json()["service"] == "faircom-mcp"

@@ -60,5 +60,12 @@ containers, including systemd unit verification and logrotate config parsing.
 
 ## Current Baseline
 - Import smoke for package modules
-- Minimal integration smoke
+- Local harness smoke validates the Edge test entrypoint wiring
 - Docker-backed FairCom Edge smoke path for runtime validation
+
+## Test Consolidation Notes
+- Shared test harness utilities live under `tests/helpers/`.
+- `tests/helpers/server_harness.py` centralizes fake FastMCP setup and reusable fake adapters.
+- `tests/helpers/http.py` provides the shared ASGI HTTP request helper used across unit tests.
+- Server transport and policy tests are split into focused modules to keep bootstrap tests scoped.
+- `tests/integration/test_smoke.py` is a local harness sanity check; the real runtime path is the Edge-backed integration suite.
