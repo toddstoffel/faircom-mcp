@@ -35,10 +35,10 @@ jobs:
         run: mypy src
 
       - name: Compatibility regression matrix
-        run: pytest tests/unit/test_compatibility_matrix.py
+        run: PYTHONPATH=src:. python -m pytest tests/unit/test_compatibility_matrix.py
 
       - name: Unit and integration tests
-        run: pytest -m "not edge_integration"
+        run: PYTHONPATH=src:. python -m pytest -m "not edge_integration"
 
   container-smoke:
     runs-on: ubuntu-latest
