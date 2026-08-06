@@ -416,19 +416,34 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     }
     assert server.tools["create_transform"](
         payload={
-            "connectorName": "normalize_energy_data",
+            "transformName": "normalize_energy_data",
             "serviceName": "javascript",
-            "tableName": "edge_tags",
-            "script": "return payload;",
+            "transformService": "v8TransformService",
+            "transformActions": [
+                {
+                    "inputFields": ["*"],
+                    "transformStepMethod": "javascript",
+                    "outputFields": ["*"],
+                    "transformParams": {"script": "return payload;"},
+                }
+            ],
         },
         confirm_write=True,
     ) == {
         "action": "createTransform",
         "payload": {
+            "transformName": "normalize_energy_data",
             "connectorName": "normalize_energy_data",
             "serviceName": "javascript",
-            "tableName": "edge_tags",
-            "script": "return payload;",
+            "transformService": "v8TransformService",
+            "transformActions": [
+                {
+                    "inputFields": ["*"],
+                    "transformStepMethod": "javascript",
+                    "outputFields": ["*"],
+                    "transformParams": {"script": "return payload;"},
+                }
+            ],
         },
         "dry_run_applied": False,
         "confirm_write_required": True,
@@ -485,6 +500,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert usage_contract["example_validity"]["create_output"] == "complete"
     assert "modbus" in usage_contract["connector_payload_profiles"]
     assert "mqtt" in usage_contract["connector_payload_profiles"]
+    assert "javascript" in usage_contract["connector_payload_profiles"]
     assert "required_keys" in usage_contract["connector_payload_profiles"]["modbus"]
     assert "enum_values" in usage_contract["connector_payload_profiles"]["modbus"]
     assert "schema" in usage_contract["connector_payload_profiles"]["modbus"]
@@ -639,10 +655,18 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         (
             "createTransform",
             {
+                "transformName": "normalize_energy_data",
                 "connectorName": "normalize_energy_data",
                 "serviceName": "javascript",
-                "tableName": "edge_tags",
-                "script": "return payload;",
+                "transformService": "v8TransformService",
+                "transformActions": [
+                    {
+                        "inputFields": ["*"],
+                        "transformStepMethod": "javascript",
+                        "outputFields": ["*"],
+                        "transformParams": {"script": "return payload;"},
+                    }
+                ],
             },
         ),
     ]

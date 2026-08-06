@@ -15,12 +15,11 @@ class TableAdapter:
         *,
         database: str | None = None,
     ) -> Any:
-        payload: dict[str, str] = {}
-        if name_like:
-            payload["tableNameLike"] = name_like
-        # The current adapter/runtime path does not apply database scoping for listTables.
+        # Edge rejects tableNameLike for listTables (14702), so issue an unfiltered call.
+        _ = name_like
+        # The current adapter/runtime path also does not apply database scoping for listTables.
         _ = database
-        return self._client.post_action("listTables", payload or None)
+        return self._client.post_action("listTables", None)
 
     def describe_table(self, table_name: str) -> Any:
         payload = {"tableNames": [table_name]}

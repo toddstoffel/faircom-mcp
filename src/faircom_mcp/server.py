@@ -57,6 +57,8 @@ _MODBUS_ALLOWED_PAYLOAD_KEYS = {
     "enabled",
     "description",
     "unitId",
+    "transformName",
+    "dataCollectionIntervalMilliseconds",
     "propertyMapList",
     "settings",
 }
@@ -213,6 +215,53 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "topic": "factory/line-1/telemetry",
         },
     },
+    "javascript": {
+        "service_name": "javascript",
+        "required": ["transformName", "serviceName", "transformActions"],
+        "description": "JavaScript transform payload profile for Edge transform actions.",
+        "properties": {
+            "transformName": {"type": "string", "minLength": 1},
+            "serviceName": {"type": "string", "const": "javascript"},
+            "description": {"type": "string"},
+            "transformService": {"type": "string", "const": "v8TransformService"},
+            "transformActions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "inputFields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "transformStepMethod": {"type": "string", "minLength": 1},
+                        # Deprecated spelling accepted by Edge for compatibility.
+                        "transformActionName": {"type": "string", "minLength": 1},
+                        "outputFields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "transformParams": {"type": "object"},
+                    },
+                },
+            },
+        },
+        "example": {
+            "transformName": "add_asset_id",
+            "serviceName": "javascript",
+            "transformService": "v8TransformService",
+            "transformActions": [
+                {
+                    "inputFields": ["*"],
+                    "transformStepMethod": "javascript",
+                    "outputFields": ["*"],
+                    "transformParams": {
+                        "script": "payload.asset_id = 'asset-001'; return payload;",
+                    },
+                }
+            ],
+        },
+    },
 }
 
 
@@ -349,6 +398,7 @@ def create_server(
             action=action,
             payload=payload,
         )
+        validation_warnings = cast(list[str], validation.get("warnings", []))
         if validation["status"] == "invalid":
             return {
                 "mode": "dry_run",
@@ -371,6 +421,7 @@ def create_server(
                 "validation_errors": validation["errors"],
                 "warnings": [
                     "Dry run is a local preview only and does not call FairCom backend APIs.",
+                    *validation_warnings,
                 ],
                 "hint": "Fix validation_errors and run dry_run again before confirm_write=True.",
             }
@@ -387,6 +438,7 @@ def create_server(
                 else ("Dry run passed local schema validation only; upstream checks were not run.")
             ),
         ]
+        warnings.extend(validation_warnings)
         if action == "alterInput":
             warnings.append(
                 "alterInput may replace existing mappings; include a complete propertyMapList in "
@@ -431,18 +483,33 @@ def create_server(
     ) -> dict[str, object]:
         _ = tool_name
         if not payload:
-            return {"status": "unvalidated", "service_name": None, "errors": []}
+            return {
+                "status": "unvalidated",
+                "service_name": None,
+                "errors": [],
+                "warnings": [],
+            }
 
         payload_data = dict(payload)
 
         service_name_raw = payload_data.get("serviceName")
         if not isinstance(service_name_raw, str) or not service_name_raw.strip():
-            return {"status": "unvalidated", "service_name": None, "errors": []}
+            return {
+                "status": "unvalidated",
+                "service_name": None,
+                "errors": [],
+                "warnings": [],
+            }
 
         service_name = service_name_raw.strip().lower()
         schema = _CONNECTOR_SCHEMA_REGISTRY.get(service_name)
         if schema is None:
-            return {"status": "unvalidated", "service_name": service_name, "errors": []}
+            return {
+                "status": "unvalidated",
+                "service_name": service_name,
+                "errors": [],
+                "warnings": [],
+            }
 
         enforce_required_fields = action in {
             "createInput",
@@ -456,6 +523,7 @@ def create_server(
         }
 
         errors: list[dict[str, object]] = []
+        warnings: list[str] = []
 
         def _to_json_pointer(path: str) -> str:
             # Convert dot/bracket path form (payload.a[0].b) into JSON Pointer.
@@ -562,17 +630,9 @@ def create_server(
             for key in payload:
                 if key in _MODBUS_ALLOWED_PAYLOAD_KEYS:
                     continue
-                unknown_error = _validation_error(
-                    path=f"payload.{key}",
-                    reason="unknown_field",
-                    message=(
-                        "Unknown field for modbus connector payload. "
-                        "This field would not be transformed to the backend request."
-                    ),
-                    details={
-                        "field": key,
-                        "allowed_fields": sorted(_MODBUS_ALLOWED_PAYLOAD_KEYS),
-                    },
+                warning = (
+                    f"Unknown modbus payload field '{key}' will be passed through unchanged "
+                    "for upstream validation."
                 )
                 nearest = difflib.get_close_matches(
                     key,
@@ -581,8 +641,8 @@ def create_server(
                     cutoff=0.6,
                 )
                 if nearest:
-                    unknown_error["nearest_match"] = nearest[0]
-                errors.append(unknown_error)
+                    warning = f"{warning} Nearest known key: {nearest[0]}."
+                warnings.append(warning)
 
             modbus_protocol = payload.get("modbusProtocol")
             if not isinstance(modbus_protocol, str) or not modbus_protocol.strip():
@@ -818,7 +878,12 @@ def create_server(
                         )
 
         status = "validated" if not errors else "invalid"
-        return {"status": status, "service_name": service_name, "errors": errors}
+        return {
+            "status": status,
+            "service_name": service_name,
+            "errors": errors,
+            "warnings": warnings,
+        }
 
     def _require_connector_payload(
         *,
@@ -844,15 +909,20 @@ def create_server(
             )
 
         normalized_payload = dict(payload)
+        is_input_action = action in {"createInput", "alterInput", "deleteInput"}
+        is_transform_action = action in {"createTransform", "alterTransform", "deleteTransform"}
         connector_name = normalized_payload.get("connectorName")
-        if (not isinstance(connector_name, str) or not connector_name.strip()) and action in {
-            "createInput",
-            "alterInput",
-            "deleteInput",
-        }:
+        if (not isinstance(connector_name, str) or not connector_name.strip()) and is_input_action:
             input_name = normalized_payload.get("inputName")
             if isinstance(input_name, str) and input_name.strip():
                 connector_name = input_name.strip()
+                normalized_payload["connectorName"] = connector_name
+        if (
+            not isinstance(connector_name, str) or not connector_name.strip()
+        ) and is_transform_action:
+            transform_name = normalized_payload.get("transformName")
+            if isinstance(transform_name, str) and transform_name.strip():
+                connector_name = transform_name.strip()
                 normalized_payload["connectorName"] = connector_name
 
         if not isinstance(connector_name, str) or not connector_name.strip():
@@ -863,13 +933,15 @@ def create_server(
                     "payload": "object (required)",
                     "payload.connectorName": "string (required)",
                     "payload.inputName": "string (accepted alias for input actions)",
+                    "payload.transformName": "string (accepted alias for transform actions)",
                     "confirm_write": "true for non-dry-run changes",
                     "dry_run": "true to preview change",
                 },
                 received_args={"payload": payload, "action": action},
                 suggested_fix=(
                     "Provide payload.connectorName with a non-empty connector name. "
-                    "For input actions, payload.inputName is also accepted."
+                    "For input actions, payload.inputName is also accepted. "
+                    "For transform actions, payload.transformName is also accepted."
                 ),
                 example_payload={
                     "name": tool_name,
@@ -881,10 +953,14 @@ def create_server(
 
         connector_name = connector_name.strip()
         normalized_payload["connectorName"] = connector_name
-        if action in {"createInput", "alterInput", "deleteInput"}:
+        if is_input_action:
             input_name = normalized_payload.get("inputName")
             if not isinstance(input_name, str) or not input_name.strip():
                 normalized_payload["inputName"] = connector_name
+        if is_transform_action:
+            transform_name = normalized_payload.get("transformName")
+            if not isinstance(transform_name, str) or not transform_name.strip():
+                normalized_payload["transformName"] = connector_name
 
         service_name = normalized_payload.get("serviceName")
         if isinstance(service_name, str) and service_name.strip().lower() == "modbus":
@@ -1140,7 +1216,6 @@ def create_server(
 <html lang=\"en\">
 <head><meta charset=\"utf-8\"><title>FairCom MCP Diagnostics</title></head>
 <body>
-<h1>FairCom MCP Diagnostics</h1>
 <pre>"""
                 + payload
                 + """</pre>
@@ -2286,8 +2361,21 @@ def create_server(
                         "name": "create_transform",
                         "arguments": {
                             "payload": {
-                                "connectorName": "normalize_energy_data",
+                                "transformName": "add_asset_id",
                                 "serviceName": "javascript",
+                                "transformService": "v8TransformService",
+                                "transformActions": [
+                                    {
+                                        "inputFields": ["*"],
+                                        "transformStepMethod": "javascript",
+                                        "outputFields": ["*"],
+                                        "transformParams": {
+                                            "script": (
+                                                "payload.asset_id = 'asset-001'; return payload;"
+                                            )
+                                        },
+                                    }
+                                ],
                             },
                             "confirm_write": True,
                         },
@@ -2532,6 +2620,7 @@ def create_server(
                         "status": "valid",
                         "action": action,
                         "schema_service": validation["service_name"],
+                        "warnings": validation.get("warnings", []),
                         "normalized_payload": normalized_payload,
                         "forwarded_payload": transform_connector_request(
                             action,

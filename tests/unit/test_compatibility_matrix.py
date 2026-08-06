@@ -336,35 +336,31 @@ def test_compatibility_matrix_modbus_delete_requires_only_identity(
     assert result["action"] == "deleteInput"
 
 
-def test_compatibility_matrix_modbus_unknown_key_is_rejected(monkeypatch: object) -> None:
+def test_compatibility_matrix_modbus_unknown_key_is_passed_through(monkeypatch: object) -> None:
     server = _make_server(monkeypatch)
-
-    with pytest.raises(ValidationFailure) as exc:
-        server.tools["create_input"](
-            payload={
-                "connectorName": "modbus_input",
-                "serviceName": "modbus",
-                "modbusProtocol": "TCP",
-                "modbusServer": "127.0.0.1",
-                "modbusServerPort": 502,
-                "propertyMapList": [
-                    {
-                        "propertyName": "temperature",
-                        "modbusDataAccess": "holdingregister",
-                        "modbusDataAddress": 1199,
-                    }
-                ],
-                "modbusServerPoort": 502,
-            },
-            confirm_write=True,
-        )
-
-    validation_errors = exc.value.details["received_args"]["validation_errors"]
-    unknown_field_issue = next(
-        issue for issue in validation_errors if issue["path"] == "payload.modbusServerPoort"
+    result = server.tools["validate_connector_payloads"](
+        action="createInput",
+        payload={
+            "connectorName": "modbus_input",
+            "serviceName": "modbus",
+            "modbusProtocol": "TCP",
+            "modbusServer": "127.0.0.1",
+            "modbusServerPort": 502,
+            "propertyMapList": [
+                {
+                    "propertyName": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                }
+            ],
+            "modbusServerPoort": 502,
+        },
     )
-    assert unknown_field_issue["reason"] == "unknown_field"
-    assert unknown_field_issue["nearest_match"] == "modbusServerPort"
+
+    assert result["summary"]["all_valid"] is True
+    warning = result["results"][0]["warnings"][0]
+    assert "modbusServerPoort" in warning
+    assert "modbusServerPort" in warning
 
 
 def test_compatibility_matrix_validation_errors_include_corrected_snippet(

@@ -46,11 +46,11 @@ def test_table_adapter_calls_expected_actions() -> None:
     describe_result = adapter.describe_table("customers")
 
     assert tables_result["action"] == "listTables"
-    assert tables_result["payload"] == {"tableNameLike": "cust%"}
+    assert tables_result["payload"] is None
     assert describe_result["action"] == "describeTables"
     assert describe_result["payload"] == {"tableNames": ["customers"]}
     assert client.calls == [
-        ("listTables", {"tableNameLike": "cust%"}),
+        ("listTables", None),
         ("describeTables", {"tableNames": ["customers"]}),
     ]
 
