@@ -156,10 +156,7 @@ def test_compatibility_matrix_modbus_dry_run_invalid_preview(monkeypatch: object
         issue for issue in result["validation_errors"] if issue["path"] == "payload.propertyMapList"
     )
     assert issue["json_pointer"] == "/payload/propertyMapList"
-    assert (
-        result["preview_details"]["forwarded_payload"]["settings"]["modbusServer"]
-        == "127.0.0.1"
-    )
+    assert result["preview_details"]["forwarded_payload"]["settings"]["modbusServer"] == "127.0.0.1"
 
 
 def test_compatibility_matrix_preserves_modbus_mapping_fields_on_write(
@@ -445,10 +442,7 @@ def test_compatibility_matrix_connector_preflight_single_valid(monkeypatch: obje
     assert result["summary"] == {"total": 1, "valid": 1, "invalid": 0, "all_valid": True}
     assert result["results"][0]["status"] == "valid"
     assert result["results"][0]["normalized_payload"]["inputName"] == "modbus_input"
-    assert (
-        result["results"][0]["forwarded_payload"]["settings"]["modbusServer"]
-        == "127.0.0.1"
-    )
+    assert result["results"][0]["forwarded_payload"]["settings"]["modbusServer"] == "127.0.0.1"
 
 
 def test_compatibility_matrix_connector_preflight_batch_mixed(monkeypatch: object) -> None:

@@ -384,9 +384,7 @@ def create_server(
                 "Dry run did not run full schema validation because no local schema profile "
                 "matched this payload."
                 if not schema_validated
-                else (
-                    "Dry run passed local schema validation only; upstream checks were not run."
-                )
+                else ("Dry run passed local schema validation only; upstream checks were not run.")
             ),
         ]
         if action == "alterInput":
@@ -646,8 +644,7 @@ def create_server(
                         path="payload.modbusServerPort",
                         reason="required",
                         message=(
-                            "modbusServerPort is required and must be "
-                            "an integer in range 1..65535"
+                            "modbusServerPort is required and must be an integer in range 1..65535"
                         ),
                     )
                 )
