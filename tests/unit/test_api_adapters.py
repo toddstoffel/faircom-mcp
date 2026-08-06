@@ -53,6 +53,44 @@ def test_table_adapter_calls_expected_actions() -> None:
         ("listTables", None),
         ("describeTables", {"tableNames": ["customers"]}),
     ]
+    assert tables_result["filter"] == {
+        "name_like": "cust%",
+        "applied": False,
+        "source_count": 0,
+        "matched_count": 0,
+        "unknown_name_count": 0,
+        "reason": "unsupported_list_tables_response_shape",
+    }
+
+
+def test_table_adapter_applies_local_name_like_filter() -> None:
+    client = StubClient()
+    adapter = TableAdapter(cast(Any, client))
+
+    client.post_action = lambda action, payload=None: {
+        "action": action,
+        "payload": payload,
+        "tables": [
+            {"tableName": "customers"},
+            {"tableName": "orders"},
+            {"tableName": "cust_archive"},
+        ],
+    }
+
+    filtered = adapter.list_tables("cust%")
+
+    assert [table["tableName"] for table in filtered["tables"]] == [
+        "customers",
+        "cust_archive",
+    ]
+    assert filtered["filter"] == {
+        "name_like": "cust%",
+        "applied": True,
+        "source_count": 3,
+        "matched_count": 2,
+        "unknown_name_count": 0,
+        "reason": "local_like_filter",
+    }
 
 
 def test_connector_adapter_calls_expected_hub_actions() -> None:
@@ -119,6 +157,8 @@ def test_connector_adapter_translates_modbus_input_payload_to_settings_shape() -
             "serviceName": "modbus",
             "thingName": "PLC 74",
             "tableName": "modbusTableTCP",
+            "transformName": "normalize_energy_data",
+            "dataCollectionIntervalMilliseconds": 500,
             "modbusProtocol": "TCP",
             "modbusServer": "127.0.0.1",
             "modbusServerPort": 502,
@@ -144,6 +184,8 @@ def test_connector_adapter_translates_modbus_input_payload_to_settings_shape() -
                 "thingName": "PLC 74",
                 "tableName": "modbusTableTCP",
                 "settings": {
+                    "transformName": "normalize_energy_data",
+                    "dataCollectionIntervalMilliseconds": 500,
                     "modbusProtocol": "TCP",
                     "modbusServer": "127.0.0.1",
                     "modbusServerPort": 502,

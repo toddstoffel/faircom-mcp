@@ -19,6 +19,8 @@ _MODBUS_SETTINGS_KEYS = {
     "modbusRetryCount",
     "modbusByteOrder",
     "modbusWordOrder",
+    "transformName",
+    "dataCollectionIntervalMilliseconds",
     "propertyMapList",
 }
 

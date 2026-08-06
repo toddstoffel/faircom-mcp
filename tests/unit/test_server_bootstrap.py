@@ -481,7 +481,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         },
     }
     usage_contract = server.tools["get_usage_contract"]()
-    assert usage_contract["contract_version"] == "2026-08-05"
+    assert usage_contract["contract_version"] == "2026-08-06"
     assert usage_contract["supported_aliases"]["sql_query"]["sql"] == "statement"
     assert usage_contract["canonical_arg_keys"]["validate_connector_payloads"] == [
         "action",
@@ -506,8 +506,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert "schema" in usage_contract["connector_payload_profiles"]["modbus"]
     schema_profile = server.tools["describe_connector_schema"](service_name="modbus")
     assert schema_profile["service_name"] == "modbus"
-    assert schema_profile["schema_version"] == "2026-08-05"
+    assert schema_profile["schema_version"] == "2026-08-06"
     assert "propertyMapList" in schema_profile["schema"]["required"]
+    assert "transformName" in schema_profile["schema"]["properties"]
+    assert "dataCollectionIntervalMilliseconds" in schema_profile["schema"]["properties"]
     preflight = server.tools["validate_connector_payloads"](
         action="createInput",
         payload={

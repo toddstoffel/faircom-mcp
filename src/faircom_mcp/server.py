@@ -108,6 +108,8 @@ class ModbusConnectorPayload(TypedDict, total=False):
     enabled: bool
     description: str
     unitId: int
+    transformName: str
+    dataCollectionIntervalMilliseconds: int
     propertyMapList: Required[list[ModbusPropertyMapItem]]
     inputName: str
 
@@ -153,6 +155,8 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "enabled": {"type": "boolean"},
             "description": {"type": "string"},
             "unitId": {"type": ["integer", "number"]},
+            "transformName": {"type": "string", "minLength": 1},
+            "dataCollectionIntervalMilliseconds": {"type": ["integer", "number"]},
             "propertyMapList": {
                 "type": "array",
                 "minItems": 1,
@@ -2238,8 +2242,8 @@ def create_server(
             "get_usage_contract",
             "admin",
             lambda: {
-                "contract_version": "2026-08-05",
-                "updated_at": "2026-08-05",
+                "contract_version": "2026-08-06",
+                "updated_at": "2026-08-06",
                 "required_call_order": ["initialize", "tools/list", "tools/call"],
                 "session_requirements": {
                     "required": True,
@@ -2445,7 +2449,7 @@ def create_server(
             "admin",
             lambda: {
                 "service_name": normalized,
-                "schema_version": "2026-08-05",
+                "schema_version": "2026-08-06",
                 "schema": schema,
                 "known_good_example": schema.get("example"),
             },
