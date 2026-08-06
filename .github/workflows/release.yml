@@ -21,32 +21,26 @@ jobs:
           VERSION=${{ github.ref_name }}
           VERSION=${VERSION#v}  # Strip leading 'v'
 
-          # Use Python to safely update version in [project] section
+          # Keep the canonical version source aligned with the pushed tag.
           python3 - "$VERSION" << 'PYTHON_EOF'
           import sys
-          import re
+          from pathlib import Path
 
           version = sys.argv[1]
-          with open('pyproject.toml', 'r') as f:
-              content = f.read()
-
-          # Find [project] section and replace version field
-          # Match: [project] ... name = "faircom-mcp" ... version = "..."
-          pattern = r'(\[project\][\s\S]*?name = "faircom-mcp"\s*)version = "[^"]*"'
-          content = re.sub(pattern, rf'\1version = "{version}"', content, count=1)
-
-          with open('pyproject.toml', 'w') as f:
-              f.write(content)
-
-          print(f"✓ Updated pyproject.toml to version {version}")
-
-          # Verify the change
-          with open('pyproject.toml', 'r') as f:
-              for line in f:
-                  if line.startswith('version ='):
-                      print(f"✓ Verified: {line.strip()}")
-                      break
+          version_file = Path('src/faircom_mcp/_version.py')
+          version_file.write_text(
+              f'from __future__ import annotations\n\n__version__ = "{version}"\n',
+              encoding='utf-8',
+          )
+          print(f"✓ Updated {version_file} to version {version}")
           PYTHON_EOF
+
+      - name: Verify version matches tag
+        run: |
+          VERSION=${{ github.ref_name }}
+          VERSION=${VERSION#v}
+          ACTUAL_VERSION=$(PYTHONPATH=src python -c 'from faircom_mcp import __version__; print(__version__)')
+          test "$ACTUAL_VERSION" = "$VERSION"
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -62,7 +56,7 @@ jobs:
         run: |
           python -m ruff check src tests
           python -m mypy src
-          python -m pytest -m "not edge_integration"
+          PYTHONPATH=src:. python -m pytest -m "not edge_integration"
 
       - name: Build Python distribution
         run: python -m build
