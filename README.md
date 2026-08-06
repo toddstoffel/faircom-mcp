@@ -5,7 +5,13 @@
 
 Connect AI assistants and LLMs to FairCom databases with explicit write controls, Linux packaging, and operational tooling.
 
-> Current release: v0.1.12. The install examples and release automation in this repository are aligned to this version.
+> Current release: v${PROJECT_VERSION}. The install examples and release automation in this repository are aligned to this version.
+
+Set the release version once per shell session so the examples stay aligned with the package source of truth:
+
+```bash
+PROJECT_VERSION="$(make version)"
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -144,13 +150,13 @@ If FairCom is running on your local host machine, use:
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt-get install -y ./faircom-mcp_0.1.12_all.deb
+sudo apt-get install -y "./faircom-mcp_${PROJECT_VERSION}_all.deb"
 sudo systemctl enable --now faircom-mcp
 ```
 
 **RHEL/Rocky/AlmaLinux:**
 ```bash
-sudo dnf install -y ./faircom-mcp-0.1.12-1.noarch.rpm
+sudo dnf install -y "./faircom-mcp-${PROJECT_VERSION}-1.noarch.rpm"
 sudo systemctl enable --now faircom-mcp
 ```
 

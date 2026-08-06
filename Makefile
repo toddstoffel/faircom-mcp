@@ -1,6 +1,9 @@
-.PHONY: format lint typecheck test test-cov test-integration test-edge \
+.PHONY: format lint typecheck test test-cov test-integration test-edge version \
 	container-build container-run compose-up compose-down package-verify package-build package-validate \
 	release-integrity
+
+version:
+	PYTHONPATH=src python3 -c 'from faircom_mcp import __version__; print(__version__)'
 
 format:
 	python3 -m ruff format src tests

@@ -3,7 +3,13 @@
 This document is for maintainers who build, test, and package FairCom MCP.
 End-user install and configuration instructions are in `README.md`.
 
-> Current maintainer release target: v0.1.12. Update the package metadata and release docs together before tagging a new release.
+> Current maintainer release target: v${PROJECT_VERSION}. Update the package metadata and release docs together before tagging a new release.
+
+Set the release version once per shell session so the examples below stay aligned with the package source of truth:
+
+```bash
+PROJECT_VERSION="$(make version)"
+```
 
 ## Maintainer Prerequisites
 - Python 3.11+
@@ -220,7 +226,7 @@ Important:
 File: `.github/workflows/release.yml`
 
 Trigger:
-- Tag push matching `v*` (for example: `v0.1.3`)
+- Tag push matching `v*` (for example: `vX.Y.Z`)
 
 Purpose:
 - Re-run quality and packaging steps for the tagged commit
@@ -253,17 +259,17 @@ After validating changes on `main`:
 Recommended:
 
 ```bash
-devtools/publish_release.sh v0.1.12
+devtools/publish_release.sh "v${PROJECT_VERSION}"
 ```
 
 Script options:
 
 ```bash
 # Trigger publish but do not wait for workflow completion
-devtools/publish_release.sh v0.1.12 --no-wait
+devtools/publish_release.sh "v${PROJECT_VERSION}" --no-wait
 
 # Allow local uncommitted changes (advanced; not recommended)
-devtools/publish_release.sh v0.1.12 --allow-dirty
+devtools/publish_release.sh "v${PROJECT_VERSION}" --allow-dirty
 ```
 
 Manual fallback (equivalent trigger):
@@ -271,8 +277,8 @@ Manual fallback (equivalent trigger):
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag v0.1.12
-git push origin v0.1.12
+git tag "v${PROJECT_VERSION}"
+git push origin "v${PROJECT_VERSION}"
 ```
 
 ## Troubleshooting CI/CD Visibility

@@ -12,7 +12,7 @@ Usage:
   devtools/publish_release.sh <tag> [--no-wait] [--allow-dirty]
 
 Arguments:
-  <tag>           Release tag to publish (must start with 'v', e.g. v0.1.4)
+  <tag>           Release tag to publish (must start with 'v', e.g. vX.Y.Z)
 
 Options:
   --no-wait       Do not wait for GitHub Actions workflows to finish
@@ -77,7 +77,7 @@ if [[ -z "${TAG}" ]]; then
 fi
 
 if [[ "${TAG}" != v* ]]; then
-  echo "Tag must start with 'v' (example: v0.1.4)." >&2
+  echo "Tag must start with 'v' (example: vX.Y.Z)." >&2
   exit 1
 fi
 

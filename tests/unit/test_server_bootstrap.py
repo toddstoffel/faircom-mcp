@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from faircom_mcp import __version__
 from faircom_mcp.config import AppConfig
 from faircom_mcp.errors import ValidationFailure
 from tests.helpers.http import get as _get
@@ -417,9 +418,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     create_input_example = usage_contract["minimal_payload_examples"]["create_input"]["arguments"][
         "payload"
     ]
-    create_output_example = usage_contract["minimal_payload_examples"]["create_output"]["arguments"][
-        "payload"
-    ]
+    create_output_example = usage_contract["minimal_payload_examples"]["create_output"][
+        "arguments"
+    ]["payload"]
     assert create_input_example["inputName"] == "modbus_energy_input"
     assert create_output_example["serviceName"] == "mqtt"
     assert usage_contract["example_validity"]["create_input"] == "complete"
@@ -452,7 +453,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     }
     capabilities = server.tools["capabilities_summary"]()
     assert capabilities["service"]["name"] == "faircom-mcp"
-    assert capabilities["service"]["version"] == "0.1.11"
+    assert capabilities["service"]["version"] == __version__
     assert capabilities["security"]["default_policy"] == "default"
     assert capabilities["security"]["read_write_enabled"] is True
     assert capabilities["security"]["diagnostics_enabled"] is False
@@ -588,5 +589,3 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert write_exc.value.details["reason_code"] == "missing_write_confirmation"
     metrics_payload_after = server.tools["observability_metrics"]()
     assert metrics_payload_after["compatibility_events"]["sql_execute:invalid_arg_name"] >= 1
-
-

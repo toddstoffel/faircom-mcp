@@ -18,6 +18,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 
+from faircom_mcp import __version__
 from faircom_mcp.api.client import FaircomAPIClient, create_client
 from faircom_mcp.api.connectors import ConnectorAdapter
 from faircom_mcp.api.dialect import detect_unsupported_features, normalize_select_first_to_top
@@ -291,7 +292,9 @@ def create_server(
             "payload": payload,
             "would_succeed": would_succeed,
             "preview": (
-                "Connector change would execute" if schema_validated else "Connector change preview only"
+                "Connector change would execute"
+                if schema_validated
+                else "Connector change preview only"
             ),
             "preview_details": {
                 "action": action,
@@ -492,9 +495,7 @@ def create_server(
                         "modbusDataType",
                         "modbusDataLen",
                     }
-                    unknown_property_map_keys = sorted(
-                        set(entry.keys()) - known_property_map_keys
-                    )
+                    unknown_property_map_keys = sorted(set(entry.keys()) - known_property_map_keys)
                     if unknown_property_map_keys:
                         errors.append(
                             _validation_error(
@@ -1947,7 +1948,7 @@ def create_server(
             lambda: {
                 "service": {
                     "name": "faircom-mcp",
-                    "version": "0.1.11",
+                    "version": __version__,
                     "compatibility": {
                         "faircom": ["Edge", "DB", "RTG", "ISAM", "MQ"],
                         "transport": ["http", "sse", "stdio"],
