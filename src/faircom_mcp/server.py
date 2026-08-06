@@ -561,7 +561,7 @@ def create_server(
                     )
 
         if modbus_create_or_alter:
-            for key in payload.keys():
+            for key in payload:
                 if key in _MODBUS_ALLOWED_PAYLOAD_KEYS:
                     continue
                 unknown_error = _validation_error(
@@ -645,7 +645,10 @@ def create_server(
                     _validation_error(
                         path="payload.modbusServerPort",
                         reason="required",
-                        message="modbusServerPort is required and must be an integer in range 1..65535",
+                        message=(
+                            "modbusServerPort is required and must be "
+                            "an integer in range 1..65535"
+                        ),
                     )
                 )
 
@@ -687,14 +690,15 @@ def create_server(
                         )
                         continue
 
-                    for key in entry.keys():
+                    for key in entry:
                         if key in _MODBUS_ALLOWED_PROPERTY_MAP_KEYS:
                             continue
                         unknown_entry_error = _validation_error(
                             path=f"payload.propertyMapList[{index}].{key}",
                             reason="unknown_field",
                             message=(
-                                "Unknown field in propertyMapList item for modbus connector payload."
+                                "Unknown field in propertyMapList item "
+                                "for modbus connector payload."
                             ),
                             details={
                                 "field": key,
@@ -780,8 +784,9 @@ def create_server(
                                 path=f"payload.propertyMapList[{index}].bitStartPosition",
                                 reason="required",
                                 message=(
-                                    "bitStartPosition is required when modbusDataType is bitBoolean "
-                                    "for coil/discreteinput mappings"
+                                    "bitStartPosition is required when "
+                                    "modbusDataType is bitBoolean for "
+                                    "coil/discreteinput mappings"
                                 ),
                             )
                         )
@@ -1791,7 +1796,11 @@ def create_server(
     ) -> object:
         audit_log.record(
             event_type="connector_write_attempt",
-            details={"tool": "create_transform", "dry_run": dry_run, "confirm_write": confirm_write},
+            details={
+                "tool": "create_transform",
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
         )
         if dry_run:
             return _run_tool(
@@ -1865,7 +1874,11 @@ def create_server(
     ) -> object:
         audit_log.record(
             event_type="connector_write_attempt",
-            details={"tool": "alter_transform", "dry_run": dry_run, "confirm_write": confirm_write},
+            details={
+                "tool": "alter_transform",
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
         )
         if dry_run:
             return _run_tool(
@@ -1939,7 +1952,11 @@ def create_server(
     ) -> object:
         audit_log.record(
             event_type="connector_write_attempt",
-            details={"tool": "delete_transform", "dry_run": dry_run, "confirm_write": confirm_write},
+            details={
+                "tool": "delete_transform",
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
         )
         if dry_run:
             return _run_tool(
