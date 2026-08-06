@@ -414,6 +414,26 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "connectivity before calling with confirm_write=True."
         ),
     }
+    assert server.tools["create_transform"](
+        payload={
+            "connectorName": "normalize_energy_data",
+            "serviceName": "javascript",
+            "tableName": "edge_tags",
+            "script": "return payload;",
+        },
+        confirm_write=True,
+    ) == {
+        "action": "createTransform",
+        "payload": {
+            "connectorName": "normalize_energy_data",
+            "serviceName": "javascript",
+            "tableName": "edge_tags",
+            "script": "return payload;",
+        },
+        "dry_run_applied": False,
+        "confirm_write_required": True,
+        "mutation_applied": True,
+    }
 
     assert server.tools["sql_query"](
         sql="select * from demo",
@@ -541,10 +561,12 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "connector_write_attempt",
         "connector_write_attempt",
         "connector_write_attempt",
+        "connector_write_attempt",
     ]
     assert {event["details"]["tool"] for event in audit_payload["events"]} == {
         "create_input",
         "create_output",
+        "create_transform",
     }
     assert server.tools["observability_health"]() == {
         "service": "faircom-mcp",
@@ -614,6 +636,15 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         ("describeOutputs", {"connectorNames": ["mqtt_1"]}),
         ("listOutputs", {"connectorNameLike": "mqtt%"}),
         ("describeOutputs", {"connectorNames": ["mqtt_1"]}),
+        (
+            "createTransform",
+            {
+                "connectorName": "normalize_energy_data",
+                "serviceName": "javascript",
+                "tableName": "edge_tags",
+                "script": "return payload;",
+            },
+        ),
     ]
     assert sql_query_calls == [("select * from demo", [1, "two"])]
     assert sql_query_page_calls == [("select * from demo order by id", ["active"], 3, 50)]

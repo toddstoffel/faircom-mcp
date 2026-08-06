@@ -1787,7 +1787,7 @@ def create_server(
 
     @server.tool(name="create_transform")
     def create_transform(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1806,12 +1806,12 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="create_transform",
                     action="createTransform",
-                    payload=payload,
+                    payload=cast(ConnectorPayload | None, payload),
                 ),
             )
         resolved_payload = _require_connector_payload(
             tool_name="create_transform",
-            payload=payload,
+            payload=cast(ConnectorPayload | None, payload),
             action="createTransform",
         )
         if not confirm_write:
@@ -1857,7 +1857,7 @@ def create_server(
 
     @server.tool(name="createTransform")
     def create_transform_alias(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1865,7 +1865,7 @@ def create_server(
 
     @server.tool(name="alter_transform")
     def alter_transform(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1884,12 +1884,12 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="alter_transform",
                     action="alterTransform",
-                    payload=payload,
+                    payload=cast(ConnectorPayload | None, payload),
                 ),
             )
         resolved_payload = _require_connector_payload(
             tool_name="alter_transform",
-            payload=payload,
+            payload=cast(ConnectorPayload | None, payload),
             action="alterTransform",
         )
         if not confirm_write:
@@ -1935,7 +1935,7 @@ def create_server(
 
     @server.tool(name="alterTransform")
     def alter_transform_alias(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1943,7 +1943,7 @@ def create_server(
 
     @server.tool(name="delete_transform")
     def delete_transform(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1962,12 +1962,12 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="delete_transform",
                     action="deleteTransform",
-                    payload=payload,
+                    payload=cast(ConnectorPayload | None, payload),
                 ),
             )
         resolved_payload = _require_connector_payload(
             tool_name="delete_transform",
-            payload=payload,
+            payload=cast(ConnectorPayload | None, payload),
             action="deleteTransform",
         )
         if not confirm_write:
@@ -2013,7 +2013,7 @@ def create_server(
 
     @server.tool(name="deleteTransform")
     def delete_transform_alias(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
