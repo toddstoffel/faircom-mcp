@@ -35,6 +35,49 @@ _MODBUS_DATA_ACCESS_ENUM = [
     "discreteinput",
 ]
 
+_MODBUS_DATA_TYPE_ENUM = [
+    "int16SignedAB",
+    "int16UnsignedAB",
+    "int32SignedABCD",
+    "int32UnsignedABCD",
+    "float32ABCD",
+    "bitBoolean",
+]
+
+_MODBUS_ALLOWED_PAYLOAD_KEYS = {
+    "connectorName",
+    "inputName",
+    "serviceName",
+    "modbusServer",
+    "modbusProtocol",
+    "modbusServerPort",
+    "modbusDataAddressType",
+    "thingName",
+    "tableName",
+    "enabled",
+    "description",
+    "unitId",
+    "propertyMapList",
+    "settings",
+}
+
+_MODBUS_ALLOWED_PROPERTY_MAP_KEYS = {
+    "propertyName",
+    "propertyPath",
+    "tagName",
+    "tagId",
+    "modbusDataAccess",
+    "modbusDataAddress",
+    "modbusDataType",
+    "modbusDataLen",
+    "modbusUnitId",
+    "modbusConvertToFloat",
+    "modbusDivisor",
+    "modbusDecimalDigits",
+    "bitStartPosition",
+    "scale",
+}
+
 
 class ModbusPropertyMapItem(TypedDict, total=False):
     modbusDataAccess: Required[Literal["holdingregister", "inputregister", "coil", "discreteinput"]]
@@ -47,6 +90,7 @@ class ModbusPropertyMapItem(TypedDict, total=False):
     modbusConvertToFloat: str
     modbusDivisor: int
     modbusDecimalDigits: int
+    bitStartPosition: int
     scale: int | float
 
 
@@ -85,7 +129,14 @@ ConnectorPayloadBatch = list[ConnectorPayload]
 _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
     "modbus": {
         "service_name": "modbus",
-        "required": ["connectorName", "serviceName", "modbusServer", "propertyMapList"],
+        "required": [
+            "connectorName",
+            "serviceName",
+            "modbusProtocol",
+            "modbusServer",
+            "modbusServerPort",
+            "propertyMapList",
+        ],
         "description": "Modbus connector payload schema (local validation profile).",
         "properties": {
             "connectorName": {"type": "string", "minLength": 1},
@@ -114,12 +165,16 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
                             "enum": _MODBUS_DATA_ACCESS_ENUM,
                         },
                         "modbusDataAddress": {"type": ["integer", "number"]},
-                        "modbusDataType": {"type": "string"},
+                        "modbusDataType": {
+                            "type": "string",
+                            "enum": _MODBUS_DATA_TYPE_ENUM,
+                        },
                         "modbusDataLen": {"type": ["integer", "number"]},
                         "modbusUnitId": {"type": ["integer", "number"]},
                         "modbusConvertToFloat": {"type": "string"},
                         "modbusDivisor": {"type": ["integer", "number"]},
                         "modbusDecimalDigits": {"type": ["integer", "number"]},
+                        "bitStartPosition": {"type": ["integer", "number"]},
                         "scale": {"type": ["integer", "number"]},
                     },
                 },
@@ -129,14 +184,16 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "connectorName": "modbus_energy_input",
             "inputName": "modbus_energy_input",
             "serviceName": "modbus",
-            "modbusServer": "tcp://127.0.0.1:502",
+            "modbusProtocol": "TCP",
+            "modbusServer": "127.0.0.1",
+            "modbusServerPort": 502,
             "unitId": 1,
             "propertyMapList": [
                 {
                     "propertyName": "temperature",
                     "modbusDataAddress": 1199,
                     "modbusDataAccess": "holdingregister",
-                    "modbusDataType": "float32",
+                    "modbusDataType": "int16SignedAB",
                     "modbusDataLen": 2,
                 }
             ],
@@ -299,7 +356,8 @@ def create_server(
                 "tool_name": tool_name,
                 "action": action,
                 "payload": payload,
-                "would_succeed": False,
+                "schema_outcome": "invalid",
+                "execution_status": "not_executed",
                 "preview": "Connector payload failed local schema validation",
                 "preview_details": {
                     "action": action,
@@ -318,8 +376,24 @@ def create_server(
             }
 
         schema_validated = validation["status"] == "validated"
-        would_succeed: bool | str = True if schema_validated else "unvalidated"
+        schema_outcome = "schema_valid" if schema_validated else "unvalidated"
         forwarded_payload = transform_connector_request(action, payload)
+        warnings = [
+            "Dry run is a local preview only and does not call FairCom backend APIs.",
+            (
+                "Dry run did not run full schema validation because no local schema profile "
+                "matched this payload."
+                if not schema_validated
+                else (
+                    "Dry run passed local schema validation only; upstream checks were not run."
+                )
+            ),
+        ]
+        if action == "alterInput":
+            warnings.append(
+                "alterInput may replace existing mappings; include a complete propertyMapList in "
+                "the payload."
+            )
         return {
             "mode": "dry_run",
             "status": "success",
@@ -327,7 +401,8 @@ def create_server(
             "action": action,
             "payload": payload,
             "forwarded_payload": forwarded_payload,
-            "would_succeed": would_succeed,
+            "schema_outcome": schema_outcome,
+            "execution_status": "not_executed",
             "preview": (
                 "Connector change would execute"
                 if schema_validated
@@ -343,17 +418,7 @@ def create_server(
                 "schema_status": validation["status"],
                 "schema_service": validation["service_name"],
             },
-            "warnings": [
-                "Dry run is a local preview only and does not call FairCom backend APIs.",
-                (
-                    "Dry run did not run full schema validation because no local schema profile "
-                    "matched this payload."
-                    if not schema_validated
-                    else (
-                        "Dry run passed local schema validation only; upstream checks were not run."
-                    )
-                ),
-            ],
+            "warnings": warnings,
             "hint": (
                 "Review the preview above. Then run list_inputs/describe_inputs to verify upstream "
                 "connectivity before calling with confirm_write=True."
@@ -366,7 +431,7 @@ def create_server(
         action: str,
         payload: ConnectorPayload | None,
     ) -> dict[str, object]:
-        _ = action
+        _ = tool_name
         if not payload:
             return {"status": "unvalidated", "service_name": None, "errors": []}
 
@@ -380,6 +445,17 @@ def create_server(
         schema = _CONNECTOR_SCHEMA_REGISTRY.get(service_name)
         if schema is None:
             return {"status": "unvalidated", "service_name": service_name, "errors": []}
+
+        enforce_required_fields = action in {
+            "createInput",
+            "alterInput",
+            "createOutput",
+            "alterOutput",
+        }
+        modbus_create_or_alter = service_name == "modbus" and action in {
+            "createInput",
+            "alterInput",
+        }
 
         errors: list[dict[str, object]] = []
 
@@ -414,7 +490,9 @@ def create_server(
         def _modbus_minimal_snippet() -> dict[str, object]:
             return {
                 "serviceName": "modbus",
-                "modbusServer": "tcp://127.0.0.1:502",
+                "modbusProtocol": "TCP",
+                "modbusServer": "127.0.0.1",
+                "modbusServerPort": 502,
                 "propertyMapList": [
                     {
                         "propertyName": "temperature",
@@ -457,7 +535,7 @@ def create_server(
             return error
 
         required_keys = schema.get("required", [])
-        if isinstance(required_keys, list):
+        if enforce_required_fields and isinstance(required_keys, list):
             for key in required_keys:
                 value = payload.get(str(key))
                 if isinstance(value, str):
@@ -482,7 +560,95 @@ def create_server(
                         )
                     )
 
-        if service_name == "modbus":
+        if modbus_create_or_alter:
+            for key in payload.keys():
+                if key in _MODBUS_ALLOWED_PAYLOAD_KEYS:
+                    continue
+                unknown_error = _validation_error(
+                    path=f"payload.{key}",
+                    reason="unknown_field",
+                    message=(
+                        "Unknown field for modbus connector payload. "
+                        "This field would not be transformed to the backend request."
+                    ),
+                    details={
+                        "field": key,
+                        "allowed_fields": sorted(_MODBUS_ALLOWED_PAYLOAD_KEYS),
+                    },
+                )
+                nearest = difflib.get_close_matches(
+                    key,
+                    sorted(_MODBUS_ALLOWED_PAYLOAD_KEYS),
+                    n=1,
+                    cutoff=0.6,
+                )
+                if nearest:
+                    unknown_error["nearest_match"] = nearest[0]
+                errors.append(unknown_error)
+
+            modbus_protocol = payload.get("modbusProtocol")
+            if not isinstance(modbus_protocol, str) or not modbus_protocol.strip():
+                errors.append(
+                    _validation_error(
+                        path="payload.modbusProtocol",
+                        reason="required",
+                        message="modbusProtocol is required",
+                    )
+                )
+
+            modbus_server = payload.get("modbusServer")
+            if isinstance(modbus_server, str) and modbus_server.strip():
+                modbus_server_normalized = modbus_server.strip()
+                if "://" in modbus_server_normalized:
+                    errors.append(
+                        _validation_error(
+                            path="payload.modbusServer",
+                            reason="invalid_format",
+                            message=(
+                                "modbusServer must be a bare host or IP. "
+                                "Provide port separately via modbusServerPort."
+                            ),
+                            details={
+                                "received": modbus_server,
+                                "corrected_snippet": {
+                                    "modbusServer": "127.0.0.1",
+                                    "modbusServerPort": 502,
+                                },
+                            },
+                        )
+                    )
+                elif re.fullmatch(r"[^/:]+:\d+", modbus_server_normalized):
+                    host_part, _, port_part = modbus_server_normalized.partition(":")
+                    errors.append(
+                        _validation_error(
+                            path="payload.modbusServer",
+                            reason="invalid_format",
+                            message=(
+                                "modbusServer must not include a :port suffix. "
+                                "Use modbusServerPort."
+                            ),
+                            details={
+                                "received": modbus_server,
+                                "corrected_snippet": {
+                                    "modbusServer": host_part,
+                                    "modbusServerPort": int(port_part),
+                                },
+                            },
+                        )
+                    )
+
+            modbus_server_port = payload.get("modbusServerPort")
+            if isinstance(modbus_server_port, float) and modbus_server_port.is_integer():
+                modbus_server_port = int(modbus_server_port)
+            if not isinstance(modbus_server_port, int) or not (1 <= modbus_server_port <= 65535):
+                errors.append(
+                    _validation_error(
+                        path="payload.modbusServerPort",
+                        reason="required",
+                        message="modbusServerPort is required and must be an integer in range 1..65535",
+                    )
+                )
+
             property_map_list = payload.get("propertyMapList")
             if not isinstance(property_map_list, list) or not property_map_list:
                 errors.append(
@@ -521,6 +687,30 @@ def create_server(
                         )
                         continue
 
+                    for key in entry.keys():
+                        if key in _MODBUS_ALLOWED_PROPERTY_MAP_KEYS:
+                            continue
+                        unknown_entry_error = _validation_error(
+                            path=f"payload.propertyMapList[{index}].{key}",
+                            reason="unknown_field",
+                            message=(
+                                "Unknown field in propertyMapList item for modbus connector payload."
+                            ),
+                            details={
+                                "field": key,
+                                "allowed_fields": sorted(_MODBUS_ALLOWED_PROPERTY_MAP_KEYS),
+                            },
+                        )
+                        nearest = difflib.get_close_matches(
+                            key,
+                            sorted(_MODBUS_ALLOWED_PROPERTY_MAP_KEYS),
+                            n=1,
+                            cutoff=0.6,
+                        )
+                        if nearest:
+                            unknown_entry_error["nearest_match"] = nearest[0]
+                        errors.append(unknown_entry_error)
+
                     access = entry.get("modbusDataAccess")
                     if not isinstance(access, str) or not access.strip():
                         errors.append(
@@ -549,6 +739,50 @@ def create_server(
                                 path=f"payload.propertyMapList[{index}].modbusDataAddress",
                                 reason="required",
                                 message="modbusDataAddress is required",
+                            )
+                        )
+
+                    data_type = entry.get("modbusDataType")
+                    if isinstance(data_type, str) and data_type.strip():
+                        data_type_normalized = data_type.strip()
+                        if data_type_normalized not in _MODBUS_DATA_TYPE_ENUM:
+                            enum_error = _validation_error(
+                                path=f"payload.propertyMapList[{index}].modbusDataType",
+                                reason="invalid_enum",
+                                message=(
+                                    "modbusDataType must be one of the allowed values. "
+                                    "Use explicit byte-order-qualified values."
+                                ),
+                                details={
+                                    "received": data_type,
+                                    "allowed_values": _MODBUS_DATA_TYPE_ENUM,
+                                },
+                            )
+                            nearest = difflib.get_close_matches(
+                                data_type_normalized,
+                                _MODBUS_DATA_TYPE_ENUM,
+                                n=1,
+                                cutoff=0.6,
+                            )
+                            if nearest:
+                                enum_error["nearest_match"] = nearest[0]
+                            errors.append(enum_error)
+
+                    access_normalized = access.strip().lower() if isinstance(access, str) else None
+                    if (
+                        access_normalized in {"coil", "discreteinput"}
+                        and isinstance(data_type, str)
+                        and data_type.strip() == "bitBoolean"
+                        and not isinstance(entry.get("bitStartPosition"), (int, float))
+                    ):
+                        errors.append(
+                            _validation_error(
+                                path=f"payload.propertyMapList[{index}].bitStartPosition",
+                                reason="required",
+                                message=(
+                                    "bitStartPosition is required when modbusDataType is bitBoolean "
+                                    "for coil/discreteinput mappings"
+                                ),
                             )
                         )
 
@@ -1525,6 +1759,252 @@ def create_server(
     ) -> object:
         return delete_output(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
 
+    @server.tool(name="list_transforms")
+    def list_transforms(payload: dict[str, object] | None = None) -> object:
+        return _run_tool(
+            "list_transforms",
+            "metadata",
+            lambda: connector_adapter.list_transforms(payload),
+        )
+
+    @server.tool(name="listTransforms")
+    def list_transforms_alias(payload: dict[str, object] | None = None) -> object:
+        return list_transforms(payload=payload)
+
+    @server.tool(name="describe_transforms")
+    def describe_transforms(payload: dict[str, object] | None = None) -> object:
+        return _run_tool(
+            "describe_transforms",
+            "metadata",
+            lambda: connector_adapter.describe_transforms(payload),
+        )
+
+    @server.tool(name="describeTransforms")
+    def describe_transforms_alias(payload: dict[str, object] | None = None) -> object:
+        return describe_transforms(payload=payload)
+
+    @server.tool(name="create_transform")
+    def create_transform(
+        payload: ConnectorPayload | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={"tool": "create_transform", "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "create_transform",
+                "connector",
+                lambda: _connector_preview(
+                    tool_name="create_transform",
+                    action="createTransform",
+                    payload=payload,
+                ),
+            )
+        resolved_payload = _require_connector_payload(
+            tool_name="create_transform",
+            payload=payload,
+            action="createTransform",
+        )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="create_transform",
+                message="create_transform requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": resolved_payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                ),
+                example_payload={
+                    "name": "create_transform",
+                    "arguments": {"payload": {"connectorName": "demo", "type": "transform"}},
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _run_tool(
+            "create_transform",
+            "connector",
+            lambda: connector_adapter.create_transform(resolved_payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="createTransform")
+    def create_transform_alias(
+        payload: ConnectorPayload | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return create_transform(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
+
+    @server.tool(name="alter_transform")
+    def alter_transform(
+        payload: ConnectorPayload | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={"tool": "alter_transform", "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "alter_transform",
+                "connector",
+                lambda: _connector_preview(
+                    tool_name="alter_transform",
+                    action="alterTransform",
+                    payload=payload,
+                ),
+            )
+        resolved_payload = _require_connector_payload(
+            tool_name="alter_transform",
+            payload=payload,
+            action="alterTransform",
+        )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="alter_transform",
+                message="alter_transform requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": resolved_payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                ),
+                example_payload={
+                    "name": "alter_transform",
+                    "arguments": {"payload": {"connectorName": "demo", "type": "transform"}},
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _run_tool(
+            "alter_transform",
+            "connector",
+            lambda: connector_adapter.alter_transform(resolved_payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="alterTransform")
+    def alter_transform_alias(
+        payload: ConnectorPayload | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return alter_transform(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
+
+    @server.tool(name="delete_transform")
+    def delete_transform(
+        payload: ConnectorPayload | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={"tool": "delete_transform", "dry_run": dry_run, "confirm_write": confirm_write},
+        )
+        if dry_run:
+            return _run_tool(
+                "delete_transform",
+                "connector",
+                lambda: _connector_preview(
+                    tool_name="delete_transform",
+                    action="deleteTransform",
+                    payload=payload,
+                ),
+            )
+        resolved_payload = _require_connector_payload(
+            tool_name="delete_transform",
+            payload=payload,
+            action="deleteTransform",
+        )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="delete_transform",
+                message="delete_transform requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": resolved_payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                ),
+                example_payload={
+                    "name": "delete_transform",
+                    "arguments": {"payload": {"connectorName": "demo", "type": "transform"}},
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _run_tool(
+            "delete_transform",
+            "connector",
+            lambda: connector_adapter.delete_transform(resolved_payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="deleteTransform")
+    def delete_transform_alias(
+        payload: ConnectorPayload | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return delete_transform(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
+
     @server.tool(name="sql_query")
     def sql_query(
         statement: str | None = None,
@@ -1709,6 +2189,11 @@ def create_server(
                     "create_output": ["payload", "confirm_write", "dry_run"],
                     "alter_output": ["payload", "confirm_write", "dry_run"],
                     "delete_output": ["payload", "confirm_write", "dry_run"],
+                    "list_transforms": ["payload"],
+                    "describe_transforms": ["payload"],
+                    "create_transform": ["payload", "confirm_write", "dry_run"],
+                    "alter_transform": ["payload", "confirm_write", "dry_run"],
+                    "delete_transform": ["payload", "confirm_write", "dry_run"],
                     "describe_connector_schema": ["service_name"],
                     "validate_connector_payloads": ["action", "payload", "payloads"],
                 },
@@ -1730,6 +2215,11 @@ def create_server(
                     "create_output": {},
                     "alter_output": {},
                     "delete_output": {},
+                    "list_transforms": {},
+                    "describe_transforms": {},
+                    "create_transform": {},
+                    "alter_transform": {},
+                    "delete_transform": {},
                     "describe_connector_schema": {},
                     "validate_connector_payloads": {},
                 },
@@ -1754,11 +2244,13 @@ def create_server(
                                 "connectorName": "modbus_energy_input",
                                 "inputName": "modbus_energy_input",
                                 "serviceName": "modbus",
-                                "modbusServer": "tcp://127.0.0.1:502",
+                                "modbusProtocol": "TCP",
+                                "modbusServer": "127.0.0.1",
+                                "modbusServerPort": 502,
                                 "propertyMapList": [
                                     {
                                         "modbusDataAccess": "holdingregister",
-                                        "modbusDataType": "float32",
+                                        "modbusDataType": "int16SignedAB",
                                         "modbusDataLen": 2,
                                     }
                                 ],
@@ -1776,6 +2268,16 @@ def create_server(
                             "confirm_write": True,
                         },
                     },
+                    "create_transform": {
+                        "name": "create_transform",
+                        "arguments": {
+                            "payload": {
+                                "connectorName": "normalize_energy_data",
+                                "serviceName": "javascript",
+                            },
+                            "confirm_write": True,
+                        },
+                    },
                     "describe_connector_schema": {
                         "name": "describe_connector_schema",
                         "arguments": {"service_name": "modbus"},
@@ -1788,11 +2290,13 @@ def create_server(
                                 {
                                     "connectorName": "modbus_energy_input",
                                     "serviceName": "modbus",
-                                    "modbusServer": "tcp://127.0.0.1:502",
+                                    "modbusProtocol": "TCP",
+                                    "modbusServer": "127.0.0.1",
+                                    "modbusServerPort": 502,
                                     "propertyMapList": [
                                         {
                                             "modbusDataAccess": "holdingregister",
-                                            "modbusDataType": "float32",
+                                            "modbusDataType": "int16SignedAB",
                                             "modbusDataLen": 2,
                                         }
                                     ],
@@ -1806,6 +2310,7 @@ def create_server(
                     "list_tables": "complete",
                     "create_input": "complete",
                     "create_output": "complete",
+                    "create_transform": "complete",
                     "describe_connector_schema": "complete",
                     "validate_connector_payloads": "complete",
                 },
@@ -1878,7 +2383,9 @@ def create_server(
                         "payload": {
                             "connectorName": "modbus_energy_input",
                             "serviceName": "modbus",
-                            "modbusServer": "tcp://127.0.0.1:502",
+                            "modbusProtocol": "TCP",
+                            "modbusServer": "127.0.0.1",
+                            "modbusServerPort": 502,
                             "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
                         },
                     },
@@ -1907,7 +2414,9 @@ def create_server(
                             {
                                 "connectorName": "modbus_energy_input",
                                 "serviceName": "modbus",
-                                "modbusServer": "tcp://127.0.0.1:502",
+                                "modbusProtocol": "TCP",
+                                "modbusServer": "127.0.0.1",
+                                "modbusServerPort": 502,
                                 "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
                             }
                         ],
@@ -1929,7 +2438,9 @@ def create_server(
                             {
                                 "connectorName": "modbus_energy_input",
                                 "serviceName": "modbus",
-                                "modbusServer": "tcp://127.0.0.1:502",
+                                "modbusProtocol": "TCP",
+                                "modbusServer": "127.0.0.1",
+                                "modbusServerPort": 502,
                                 "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
                             }
                         ]
@@ -2280,6 +2791,62 @@ def create_server(
                         "stability": "stable",
                         "description": (
                             "Delete an output connector with confirmation "
+                            "guardrails and dry-run preview."
+                        ),
+                    },
+                    {
+                        "name": "list_transforms",
+                        "aliases": ["listTransforms"],
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": (
+                            "List transform connectors visible to the configured access context."
+                        ),
+                    },
+                    {
+                        "name": "describe_transforms",
+                        "aliases": ["describeTransforms"],
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Describe configured transform connectors.",
+                    },
+                    {
+                        "name": "create_transform",
+                        "aliases": ["createTransform"],
+                        "group": "connector",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": (
+                            "Create a transform connector with confirmation "
+                            "guardrails and dry-run preview."
+                        ),
+                    },
+                    {
+                        "name": "alter_transform",
+                        "aliases": ["alterTransform"],
+                        "group": "connector",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": (
+                            "Alter a transform connector with confirmation "
+                            "guardrails and dry-run preview."
+                        ),
+                    },
+                    {
+                        "name": "delete_transform",
+                        "aliases": ["deleteTransform"],
+                        "group": "connector",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": (
+                            "Delete a transform connector with confirmation "
                             "guardrails and dry-run preview."
                         ),
                     },

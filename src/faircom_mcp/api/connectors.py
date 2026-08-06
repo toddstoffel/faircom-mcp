@@ -15,6 +15,10 @@ _MODBUS_SETTINGS_KEYS = {
     "modbusDataBits",
     "modbusParity",
     "modbusStopBits",
+    "modbusTimeoutMs",
+    "modbusRetryCount",
+    "modbusByteOrder",
+    "modbusWordOrder",
     "propertyMapList",
 }
 
@@ -33,6 +37,13 @@ def transform_connector_request(
             transformed["inputNameLike"] = transformed.pop("connectorNameLike")
         if "inputNames" not in transformed and "connectorNames" in transformed:
             transformed["inputNames"] = transformed.pop("connectorNames")
+        if "inputNames" not in transformed and "inputName" in transformed:
+            input_name = transformed.pop("inputName")
+            if isinstance(input_name, str):
+                input_name = input_name.strip()
+                transformed["inputNames"] = [input_name] if input_name else []
+            elif isinstance(input_name, list):
+                transformed["inputNames"] = input_name
         return transformed
 
     if action in {"createInput", "alterInput", "deleteInput"}:
@@ -107,3 +118,18 @@ class ConnectorAdapter:
 
     def delete_output(self, payload: Mapping[str, Any]) -> Any:
         return self._client.hub_action("deleteOutput", payload)
+
+    def list_transforms(self, payload: Mapping[str, Any] | None = None) -> Any:
+        return self._client.hub_action("listTransforms", payload)
+
+    def describe_transforms(self, payload: Mapping[str, Any] | None = None) -> Any:
+        return self._client.hub_action("describeTransforms", payload)
+
+    def create_transform(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.hub_action("createTransform", payload)
+
+    def alter_transform(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.hub_action("alterTransform", payload)
+
+    def delete_transform(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.hub_action("deleteTransform", payload)

@@ -69,6 +69,11 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
     create_output = adapter.create_output({"connectorName": "mqtt_1"})
     alter_output = adapter.alter_output({"connectorName": "mqtt_1"})
     delete_output = adapter.delete_output({"connectorName": "mqtt_1"})
+    transforms = adapter.list_transforms({"connectorNameLike": "xform%"})
+    transform_detail = adapter.describe_transforms({"connectorNames": ["xform_1"]})
+    create_transform = adapter.create_transform({"connectorName": "xform_1"})
+    alter_transform = adapter.alter_transform({"connectorName": "xform_1"})
+    delete_transform = adapter.delete_transform({"connectorName": "xform_1"})
 
     assert inputs["action"] == "listInputs"
     assert input_detail["action"] == "describeInputs"
@@ -80,6 +85,11 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
     assert create_output["action"] == "createOutput"
     assert alter_output["action"] == "alterOutput"
     assert delete_output["action"] == "deleteOutput"
+    assert transforms["action"] == "listTransforms"
+    assert transform_detail["action"] == "describeTransforms"
+    assert create_transform["action"] == "createTransform"
+    assert alter_transform["action"] == "alterTransform"
+    assert delete_transform["action"] == "deleteTransform"
     assert client.calls == [
         ("hub:listInputs", {"inputNameLike": "modbus%"}),
         ("hub:describeInputs", {"inputNames": ["modbus_1"]}),
@@ -91,6 +101,11 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
         ("hub:createOutput", {"connectorName": "mqtt_1"}),
         ("hub:alterOutput", {"connectorName": "mqtt_1"}),
         ("hub:deleteOutput", {"connectorName": "mqtt_1"}),
+        ("hub:listTransforms", {"connectorNameLike": "xform%"}),
+        ("hub:describeTransforms", {"connectorNames": ["xform_1"]}),
+        ("hub:createTransform", {"connectorName": "xform_1"}),
+        ("hub:alterTransform", {"connectorName": "xform_1"}),
+        ("hub:deleteTransform", {"connectorName": "xform_1"}),
     ]
 
 

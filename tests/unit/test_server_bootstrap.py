@@ -135,6 +135,28 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             connector_calls.append(("deleteOutput", payload))
             return {"action": "deleteOutput", "payload": payload}
 
+        def list_transforms(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+            connector_calls.append(("listTransforms", payload))
+            return {"action": "listTransforms", "payload": payload}
+
+        def describe_transforms(
+            self, payload: dict[str, object] | None = None
+        ) -> dict[str, object]:
+            connector_calls.append(("describeTransforms", payload))
+            return {"action": "describeTransforms", "payload": payload}
+
+        def create_transform(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("createTransform", payload))
+            return {"action": "createTransform", "payload": payload}
+
+        def alter_transform(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("alterTransform", payload))
+            return {"action": "alterTransform", "payload": payload}
+
+        def delete_transform(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("deleteTransform", payload))
+            return {"action": "deleteTransform", "payload": payload}
+
     class FakeClient:
         pass
 
@@ -189,6 +211,16 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "alterOutput",
         "delete_output",
         "deleteOutput",
+        "list_transforms",
+        "listTransforms",
+        "describe_transforms",
+        "describeTransforms",
+        "create_transform",
+        "createTransform",
+        "alter_transform",
+        "alterTransform",
+        "delete_transform",
+        "deleteTransform",
         "sql_query",
         "sql_query_page",
         "get_usage_contract",
@@ -322,7 +354,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "action": "createOutput",
         "payload": {"connectorName": "mqtt_1"},
         "forwarded_payload": {"connectorName": "mqtt_1"},
-        "would_succeed": "unvalidated",
+        "schema_outcome": "unvalidated",
+        "execution_status": "not_executed",
         "preview": "Connector change preview only",
         "preview_details": {
             "action": "createOutput",
@@ -356,7 +389,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "action": "createOutput",
         "payload": {"connectorName": "mqtt_2"},
         "forwarded_payload": {"connectorName": "mqtt_2"},
-        "would_succeed": "unvalidated",
+        "schema_outcome": "unvalidated",
+        "execution_status": "not_executed",
         "preview": "Connector change preview only",
         "preview_details": {
             "action": "createOutput",
@@ -443,7 +477,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         payload={
             "connectorName": "modbus_energy_input",
             "serviceName": "modbus",
-            "modbusServer": "tcp://127.0.0.1:502",
+            "modbusProtocol": "TCP",
+            "modbusServer": "127.0.0.1",
+            "modbusServerPort": 502,
             "propertyMapList": [
                 {
                     "propertyName": "temperature",
@@ -486,6 +522,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     )
     assert any(
         tool["name"] == "validate_connector_payloads" and tool["group"] == "admin"
+        for tool in capabilities["tools"]
+    )
+    assert any(
+        tool["name"] == "create_transform" and tool.get("aliases") == ["createTransform"]
         for tool in capabilities["tools"]
     )
     metrics_payload = server.tools["observability_metrics"]()

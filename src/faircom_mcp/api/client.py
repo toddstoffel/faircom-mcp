@@ -321,6 +321,11 @@ class FaircomAPIClient:
             "createOutput",
             "alterOutput",
             "deleteOutput",
+            "listTransforms",
+            "describeTransforms",
+            "createTransform",
+            "alterTransform",
+            "deleteTransform",
         }
         hint: str | None = None
         if request_action in connector_actions:
