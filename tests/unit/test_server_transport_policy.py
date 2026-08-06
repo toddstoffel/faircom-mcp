@@ -7,11 +7,17 @@ import pytest
 
 from faircom_mcp.errors import ValidationFailure
 from tests.helpers.http import get as _get
-from tests.helpers.server_harness import BasicFakeSQL
-from tests.helpers.server_harness import BasicFakeTables
-from tests.helpers.server_harness import create_test_config as _config
-from tests.helpers.server_harness import load_server_module as _load_server_module
-from tests.helpers.server_harness import patched_adapters
+from tests.helpers.server_harness import (
+    BasicFakeSQL,
+    BasicFakeTables,
+    patched_adapters,
+)
+from tests.helpers.server_harness import (
+    create_test_config as _config,
+)
+from tests.helpers.server_harness import (
+    load_server_module as _load_server_module,
+)
 
 
 def test_sql_query_normalizes_select_first_to_top(monkeypatch: object) -> None:

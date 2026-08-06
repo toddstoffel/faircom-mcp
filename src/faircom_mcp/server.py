@@ -9,7 +9,7 @@ import time
 import types
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any, Literal, NotRequired, Required, TypedDict
+from typing import Any, Literal, Required, TypedDict
 
 import httpx
 from fastmcp import FastMCP
@@ -27,7 +27,6 @@ from faircom_mcp.api.tables import TableAdapter
 from faircom_mcp.config import AppConfig, load_config
 from faircom_mcp.errors import FaircomError, ValidationFailure
 from faircom_mcp.observability import AuditLog, RuntimeMetrics, build_tracer, maybe_span
-
 
 _MODBUS_DATA_ACCESS_ENUM = [
     "holdingregister",
@@ -311,7 +310,9 @@ def create_server(
                     "Dry run did not run full schema validation because no local schema profile "
                     "matched this payload."
                     if not schema_validated
-                    else "Dry run passed local schema validation only; upstream checks were not run."
+                    else (
+                        "Dry run passed local schema validation only; upstream checks were not run."
+                    )
                 ),
             ],
             "hint": (
@@ -416,7 +417,7 @@ def create_server(
         unknown_top_level_keys = sorted(set(payload.keys()) - known_top_level_keys)
         if unknown_top_level_keys:
             corrected_payload = {
-                key: payload[key] for key in payload.keys() if key in known_top_level_keys
+                key: payload[key] for key in payload if key in known_top_level_keys
             }
             errors.append(
                 _validation_error(
@@ -501,7 +502,9 @@ def create_server(
                             _validation_error(
                                 path=f"payload.propertyMapList[{index}]",
                                 reason="unknown_keys",
-                                message="Property map item contains unsupported keys for modbus profile",
+                                message=(
+                                    "Property map item contains unsupported keys for modbus profile"
+                                ),
                                 details={
                                     "unknown_keys": unknown_property_map_keys,
                                     "suggested_known_keys": sorted(known_property_map_keys),
@@ -620,7 +623,8 @@ def create_server(
                 },
                 suggested_fix=(
                     "Correct the fields listed in validation_errors and retry. "
-                    "Use describe_connector_schema(service_name=...) for a known-good payload shape."
+                    "Use describe_connector_schema(service_name=...) for a known-good payload "
+                    "shape."
                 ),
                 example_payload={
                     "name": "describe_connector_schema",
@@ -2042,8 +2046,8 @@ def create_server(
                         "idempotent": True,
                         "stability": "stable",
                         "description": (
-                            "Return local connector payload schema profiles and known-good examples "
-                            "for supported connector services."
+                            "Return local connector payload schema profiles and known-good "
+                            "examples for supported connector services."
                         ),
                     },
                     {

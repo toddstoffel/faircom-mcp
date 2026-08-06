@@ -3,8 +3,8 @@ from __future__ import annotations
 import importlib
 import sys
 import types
-from contextlib import contextmanager
 from collections.abc import Callable
+from contextlib import contextmanager
 
 from faircom_mcp.config import AppConfig, AuthConfig, TransportConfig
 
@@ -141,20 +141,20 @@ def patched_adapters(
     sql_adapter: object | None = None,
     connector_adapter: object | None = None,
 ):
-    original_table_adapter = getattr(server_module, "TableAdapter")
-    original_sql_adapter = getattr(server_module, "SQLAdapter")
-    original_connector_adapter = getattr(server_module, "ConnectorAdapter")
+    original_table_adapter = server_module.TableAdapter
+    original_sql_adapter = server_module.SQLAdapter
+    original_connector_adapter = server_module.ConnectorAdapter
 
     if table_adapter is not None:
-        setattr(server_module, "TableAdapter", lambda _client: table_adapter)
+        server_module.TableAdapter = lambda _client: table_adapter
     if sql_adapter is not None:
-        setattr(server_module, "SQLAdapter", lambda _client, **_kwargs: sql_adapter)
+        server_module.SQLAdapter = lambda _client, **_kwargs: sql_adapter
     if connector_adapter is not None:
-        setattr(server_module, "ConnectorAdapter", lambda _client: connector_adapter)
+        server_module.ConnectorAdapter = lambda _client: connector_adapter
 
     try:
         yield
     finally:
-        setattr(server_module, "TableAdapter", original_table_adapter)
-        setattr(server_module, "SQLAdapter", original_sql_adapter)
-        setattr(server_module, "ConnectorAdapter", original_connector_adapter)
+        server_module.TableAdapter = original_table_adapter
+        server_module.SQLAdapter = original_sql_adapter
+        server_module.ConnectorAdapter = original_connector_adapter

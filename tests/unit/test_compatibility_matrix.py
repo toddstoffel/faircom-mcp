@@ -3,11 +3,15 @@ from __future__ import annotations
 import pytest
 
 from faircom_mcp.errors import ValidationFailure
-from tests.helpers.server_harness import BasicFakeSQL
-from tests.helpers.server_harness import BasicFakeTables
-from tests.helpers.server_harness import create_test_config as _config
-from tests.helpers.server_harness import load_server_module
-from tests.helpers.server_harness import patched_adapters
+from tests.helpers.server_harness import (
+    BasicFakeSQL,
+    BasicFakeTables,
+    load_server_module,
+    patched_adapters,
+)
+from tests.helpers.server_harness import (
+    create_test_config as _config,
+)
 
 
 def _make_server(monkeypatch: object) -> object:

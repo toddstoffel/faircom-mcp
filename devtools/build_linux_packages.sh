@@ -35,12 +35,16 @@ if "${FPM_BIN}" --version 2>&1 | grep -qi "Fortran package manager"; then
 fi
 
 VERSION="${1:-$(python3 - <<'PY'
-import tomllib
+import importlib.util
 from pathlib import Path
 
-pyproject = Path('pyproject.toml')
-data = tomllib.loads(pyproject.read_text(encoding='utf-8'))
-print(data['project']['version'])
+version_path = Path('src/faircom_mcp/_version.py')
+spec = importlib.util.spec_from_file_location('faircom_mcp._version', version_path)
+if spec is None or spec.loader is None:
+  raise SystemExit(f'Unable to load version from {version_path}')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.__version__)
 PY
 )}"
 
