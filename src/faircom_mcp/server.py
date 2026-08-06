@@ -9,7 +9,7 @@ import time
 import types
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any, Literal, Required, TypedDict
+from typing import Any, Literal, Required, TypedDict, cast
 
 import httpx
 from fastmcp import FastMCP
@@ -331,7 +331,9 @@ def create_server(
         if not payload:
             return {"status": "unvalidated", "service_name": None, "errors": []}
 
-        service_name_raw = payload.get("serviceName")
+        payload_data = dict(payload)
+
+        service_name_raw = payload_data.get("serviceName")
         if not isinstance(service_name_raw, str) or not service_name_raw.strip():
             return {"status": "unvalidated", "service_name": None, "errors": []}
 
@@ -414,10 +416,10 @@ def create_server(
         if isinstance(schema_properties, dict):
             known_top_level_keys = set(schema_properties.keys())
 
-        unknown_top_level_keys = sorted(set(payload.keys()) - known_top_level_keys)
+        unknown_top_level_keys = sorted(set(payload_data.keys()) - known_top_level_keys)
         if unknown_top_level_keys:
             corrected_payload = {
-                key: payload[key] for key in payload if key in known_top_level_keys
+                key: payload_data[key] for key in payload_data if key in known_top_level_keys
             }
             errors.append(
                 _validation_error(
@@ -541,7 +543,7 @@ def create_server(
         tool_name: str,
         payload: ConnectorPayload | None,
         action: str,
-    ) -> dict[str, object]:
+    ) -> ConnectorPayload:
         if payload is None or not payload:
             raise _validation_failure(
                 tool_name=tool_name,
@@ -602,10 +604,12 @@ def create_server(
             if not isinstance(input_name, str) or not input_name.strip():
                 normalized_payload["inputName"] = connector_name
 
+        typed_payload = cast(ConnectorPayload, normalized_payload)
+
         validation = _validate_connector_schema(
             tool_name=tool_name,
             action=action,
-            payload=normalized_payload,
+            payload=typed_payload,
         )
         if validation["status"] == "invalid":
             raise _validation_failure(
@@ -632,7 +636,7 @@ def create_server(
                 },
             )
 
-        return normalized_payload
+        return typed_payload
 
     def _validate_sql_shape(tool_name: str, statement: str) -> None:
         unsupported = detect_unsupported_features(statement)
