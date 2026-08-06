@@ -5,25 +5,93 @@ from typing import Any
 
 from faircom_mcp.api.client import FaircomAPIClient
 
+_MODBUS_SETTINGS_KEYS = {
+    "modbusProtocol",
+    "modbusServer",
+    "modbusServerPort",
+    "modbusDataAddressType",
+    "modbusSerialPort",
+    "modbusBaudRate",
+    "modbusDataBits",
+    "modbusParity",
+    "modbusStopBits",
+    "propertyMapList",
+}
+
+
+def transform_connector_request(
+    action: str,
+    payload: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if payload is None:
+        return None
+
+    transformed: dict[str, Any] = dict(payload)
+
+    if action in {"listInputs", "describeInputs"}:
+        if "inputNameLike" not in transformed and "connectorNameLike" in transformed:
+            transformed["inputNameLike"] = transformed.pop("connectorNameLike")
+        if "inputNames" not in transformed and "connectorNames" in transformed:
+            transformed["inputNames"] = transformed.pop("connectorNames")
+        return transformed
+
+    if action in {"createInput", "alterInput", "deleteInput"}:
+        input_name = transformed.get("inputName")
+        if not isinstance(input_name, str) or not input_name.strip():
+            connector_name = transformed.get("connectorName")
+            if isinstance(connector_name, str) and connector_name.strip():
+                transformed["inputName"] = connector_name.strip()
+
+        transformed.pop("connectorName", None)
+
+    service_name = transformed.get("serviceName")
+    if (
+        action in {"createInput", "alterInput"}
+        and isinstance(service_name, str)
+        and service_name.strip().lower() == "modbus"
+    ):
+        existing_settings = transformed.get("settings")
+        settings = dict(existing_settings) if isinstance(existing_settings, Mapping) else {}
+        for key in list(transformed.keys()):
+            if key in _MODBUS_SETTINGS_KEYS and key not in settings:
+                settings[key] = transformed.pop(key)
+        transformed["settings"] = settings
+
+    return transformed
+
 
 class ConnectorAdapter:
     def __init__(self, client: FaircomAPIClient) -> None:
         self._client = client
 
     def list_inputs(self, payload: Mapping[str, Any] | None = None) -> Any:
-        return self._client.hub_action("listInputs", payload)
+        return self._client.hub_action(
+            "listInputs",
+            transform_connector_request("listInputs", payload),
+        )
 
     def describe_inputs(self, payload: Mapping[str, Any] | None = None) -> Any:
-        return self._client.hub_action("describeInputs", payload)
+        return self._client.hub_action(
+            "describeInputs", transform_connector_request("describeInputs", payload)
+        )
 
     def create_input(self, payload: Mapping[str, Any]) -> Any:
-        return self._client.hub_action("createInput", payload)
+        return self._client.hub_action(
+            "createInput",
+            transform_connector_request("createInput", payload),
+        )
 
     def alter_input(self, payload: Mapping[str, Any]) -> Any:
-        return self._client.hub_action("alterInput", payload)
+        return self._client.hub_action(
+            "alterInput",
+            transform_connector_request("alterInput", payload),
+        )
 
     def delete_input(self, payload: Mapping[str, Any]) -> Any:
-        return self._client.hub_action("deleteInput", payload)
+        return self._client.hub_action(
+            "deleteInput",
+            transform_connector_request("deleteInput", payload),
+        )
 
     def list_outputs(self, payload: Mapping[str, Any] | None = None) -> Any:
         return self._client.hub_action("listOutputs", payload)

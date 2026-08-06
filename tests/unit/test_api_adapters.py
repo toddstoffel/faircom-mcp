@@ -81,16 +81,69 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
     assert alter_output["action"] == "alterOutput"
     assert delete_output["action"] == "deleteOutput"
     assert client.calls == [
-        ("hub:listInputs", {"connectorNameLike": "modbus%"}),
-        ("hub:describeInputs", {"connectorNames": ["modbus_1"]}),
-        ("hub:createInput", {"connectorName": "modbus_1"}),
-        ("hub:alterInput", {"connectorName": "modbus_1"}),
-        ("hub:deleteInput", {"connectorName": "modbus_1"}),
+        ("hub:listInputs", {"inputNameLike": "modbus%"}),
+        ("hub:describeInputs", {"inputNames": ["modbus_1"]}),
+        ("hub:createInput", {"inputName": "modbus_1"}),
+        ("hub:alterInput", {"inputName": "modbus_1"}),
+        ("hub:deleteInput", {"inputName": "modbus_1"}),
         ("hub:listOutputs", {"connectorNameLike": "mqtt%"}),
         ("hub:describeOutputs", {"connectorNames": ["mqtt_1"]}),
         ("hub:createOutput", {"connectorName": "mqtt_1"}),
         ("hub:alterOutput", {"connectorName": "mqtt_1"}),
         ("hub:deleteOutput", {"connectorName": "mqtt_1"}),
+    ]
+
+
+def test_connector_adapter_translates_modbus_input_payload_to_settings_shape() -> None:
+    client = StubClient()
+    adapter = ConnectorAdapter(cast(Any, client))
+
+    create_input = adapter.create_input(
+        {
+            "connectorName": "modbus_1",
+            "serviceName": "modbus",
+            "thingName": "PLC 74",
+            "tableName": "modbusTableTCP",
+            "modbusProtocol": "TCP",
+            "modbusServer": "127.0.0.1",
+            "modbusServerPort": 502,
+            "propertyMapList": [
+                {
+                    "propertyPath": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                    "modbusUnitId": 5,
+                    "modbusDataLen": 1,
+                }
+            ],
+        }
+    )
+
+    assert create_input["action"] == "createInput"
+    assert client.calls == [
+        (
+            "hub:createInput",
+            {
+                "inputName": "modbus_1",
+                "serviceName": "modbus",
+                "thingName": "PLC 74",
+                "tableName": "modbusTableTCP",
+                "settings": {
+                    "modbusProtocol": "TCP",
+                    "modbusServer": "127.0.0.1",
+                    "modbusServerPort": 502,
+                    "propertyMapList": [
+                        {
+                            "propertyPath": "temperature",
+                            "modbusDataAccess": "holdingregister",
+                            "modbusDataAddress": 1199,
+                            "modbusUnitId": 5,
+                            "modbusDataLen": 1,
+                        }
+                    ],
+                },
+            },
+        )
     ]
 
 

@@ -26,6 +26,15 @@ def _make_server(monkeypatch: object) -> object:
     return server
 
 
+class _CaptureConnectors:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def create_input(self, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(("createInput", payload))
+        return {"action": "createInput", "payload": payload}
+
+
 def test_compatibility_matrix_strict_canonical_sql_query(monkeypatch: object) -> None:
     server = _make_server(monkeypatch)
 
@@ -138,9 +147,61 @@ def test_compatibility_matrix_modbus_dry_run_invalid_preview(monkeypatch: object
         issue for issue in result["validation_errors"] if issue["path"] == "payload.propertyMapList"
     )
     assert issue["json_pointer"] == "/payload/propertyMapList"
+    assert result["preview_details"]["forwarded_payload"]["settings"]["modbusServer"] == "tcp://127.0.0.1:502"
 
 
-def test_compatibility_matrix_rejects_unknown_top_level_connector_keys(
+def test_compatibility_matrix_preserves_modbus_mapping_fields_on_write(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+    connector_adapter = _CaptureConnectors()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["create_input"](
+        payload={
+            "connectorName": "modbus_input",
+            "serviceName": "modbus",
+            "modbusServer": "tcp://127.0.0.1:502",
+            "unitId": 7,
+            "propertyMapList": [
+                {
+                    "propertyName": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                    "modbusDataType": "float32",
+                    "modbusDataLen": 2,
+                    "scale": 0.1,
+                }
+            ],
+        },
+        confirm_write=True,
+    )
+
+    assert result["action"] == "createInput"
+    assert connector_adapter.calls
+    _action, forwarded_payload = connector_adapter.calls[-1]
+    forwarded_property_map = forwarded_payload["propertyMapList"][0]
+
+    # In this test we patch a fake connector adapter directly, so we validate
+    # server-side normalization (not adapter-side request reshaping).
+    assert forwarded_payload["connectorName"] == "modbus_input"
+    assert forwarded_payload["inputName"] == "modbus_input"
+    assert forwarded_property_map["propertyName"] == "temperature"
+    assert forwarded_property_map["propertyPath"] == "temperature"
+    assert forwarded_property_map["modbusDataAddress"] == 1199
+    assert forwarded_property_map["modbusUnitId"] == 7
+    assert forwarded_property_map["modbusConvertToFloat"] == "divideByInteger"
+    assert forwarded_property_map["modbusDivisor"] == 10
+
+
+def test_compatibility_matrix_modbus_requires_address_and_property_target(
     monkeypatch: object,
 ) -> None:
     server = _make_server(monkeypatch)
@@ -152,45 +213,19 @@ def test_compatibility_matrix_rejects_unknown_top_level_connector_keys(
                 "serviceName": "modbus",
                 "modbusServer": "tcp://127.0.0.1:502",
                 "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
-                "enabled": True,
             },
             confirm_write=True,
         )
 
     validation_errors = exc.value.details["received_args"]["validation_errors"]
-    unknown_issue = next(issue for issue in validation_errors if issue["reason"] == "unknown_keys")
-    assert unknown_issue["path"] == "payload"
-    assert "enabled" in unknown_issue["unknown_keys"]
-    assert "connectorName" in unknown_issue["suggested_known_keys"]
-
-
-def test_compatibility_matrix_rejects_unknown_modbus_property_map_keys(
-    monkeypatch: object,
-) -> None:
-    server = _make_server(monkeypatch)
-
-    with pytest.raises(ValidationFailure) as exc:
-        server.tools["create_input"](
-            payload={
-                "connectorName": "modbus_input",
-                "serviceName": "modbus",
-                "modbusServer": "tcp://127.0.0.1:502",
-                "propertyMapList": [
-                    {
-                        "modbusDataAccess": "holdingregister",
-                        "offset": 10,
-                    }
-                ],
-            },
-            confirm_write=True,
-        )
-
-    validation_errors = exc.value.details["received_args"]["validation_errors"]
-    unknown_issue = next(issue for issue in validation_errors if issue["reason"] == "unknown_keys")
-    assert unknown_issue["path"] == "payload.propertyMapList[0]"
-    assert unknown_issue["json_pointer"] == "/payload/propertyMapList/0"
-    assert "offset" in unknown_issue["unknown_keys"]
-    assert "modbusDataAccess" in unknown_issue["suggested_known_keys"]
+    assert any(
+        issue["path"].endswith(".modbusDataAddress") and issue["reason"] == "required"
+        for issue in validation_errors
+    )
+    assert any(
+        issue["path"] == "payload.propertyMapList[0]" and issue["reason"] == "required"
+        for issue in validation_errors
+    )
 
 
 def test_compatibility_matrix_enum_required_includes_allowed_values(
@@ -276,21 +311,20 @@ def test_compatibility_matrix_validation_errors_include_corrected_snippet(
         )
 
     validation_errors = exc.value.details["received_args"]["validation_errors"]
-    unknown_issue = next(issue for issue in validation_errors if issue["reason"] == "unknown_keys")
     property_map_issue = next(
         issue for issue in validation_errors if issue["path"] == "payload.propertyMapList"
     )
 
-    assert unknown_issue["corrected_snippet"] == {
-        "connectorName": "modbus_input",
-        "inputName": "modbus_input",
-        "serviceName": "modbus",
-        "modbusServer": "tcp://127.0.0.1:502",
-    }
     assert property_map_issue["corrected_snippet"] == {
         "serviceName": "modbus",
         "modbusServer": "tcp://127.0.0.1:502",
-        "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+        "propertyMapList": [
+            {
+                "propertyName": "temperature",
+                "modbusDataAccess": "holdingregister",
+                "modbusDataAddress": 1199,
+            }
+        ],
     }
 
 
@@ -315,7 +349,13 @@ def test_compatibility_matrix_connector_preflight_single_valid(monkeypatch: obje
             "connectorName": "modbus_input",
             "serviceName": "modbus",
             "modbusServer": "tcp://127.0.0.1:502",
-            "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+            "propertyMapList": [
+                {
+                    "propertyName": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                }
+            ],
         },
     )
 
@@ -323,6 +363,7 @@ def test_compatibility_matrix_connector_preflight_single_valid(monkeypatch: obje
     assert result["summary"] == {"total": 1, "valid": 1, "invalid": 0, "all_valid": True}
     assert result["results"][0]["status"] == "valid"
     assert result["results"][0]["normalized_payload"]["inputName"] == "modbus_input"
+    assert result["results"][0]["forwarded_payload"]["settings"]["modbusServer"] == "tcp://127.0.0.1:502"
 
 
 def test_compatibility_matrix_connector_preflight_batch_mixed(monkeypatch: object) -> None:
@@ -335,13 +376,25 @@ def test_compatibility_matrix_connector_preflight_batch_mixed(monkeypatch: objec
                 "connectorName": "modbus_valid",
                 "serviceName": "modbus",
                 "modbusServer": "tcp://127.0.0.1:502",
-                "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+                "propertyMapList": [
+                    {
+                        "propertyName": "temperature",
+                        "modbusDataAccess": "holdingregister",
+                        "modbusDataAddress": 1199,
+                    }
+                ],
             },
             {
                 "connectorName": "modbus_invalid",
                 "serviceName": "modbus",
                 "modbusServer": "tcp://127.0.0.1:502",
-                "propertyMapList": [{"modbusDataAccess": "holding_register"}],
+                "propertyMapList": [
+                    {
+                        "propertyName": "temperature",
+                        "modbusDataAccess": "holding_register",
+                        "modbusDataAddress": 1199,
+                    }
+                ],
             },
         ],
     )

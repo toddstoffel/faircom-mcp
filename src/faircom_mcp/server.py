@@ -20,7 +20,7 @@ from starlette.routing import Mount, Route
 
 from faircom_mcp import __version__
 from faircom_mcp.api.client import FaircomAPIClient, create_client
-from faircom_mcp.api.connectors import ConnectorAdapter
+from faircom_mcp.api.connectors import ConnectorAdapter, transform_connector_request
 from faircom_mcp.api.dialect import detect_unsupported_features, normalize_select_first_to_top
 from faircom_mcp.api.sql import SQLAdapter
 from faircom_mcp.api.tables import TableAdapter
@@ -38,14 +38,30 @@ _MODBUS_DATA_ACCESS_ENUM = [
 
 class ModbusPropertyMapItem(TypedDict, total=False):
     modbusDataAccess: Required[Literal["holdingregister", "inputregister", "coil", "discreteinput"]]
+    propertyName: str
+    propertyPath: str
+    modbusDataAddress: int
     modbusDataType: str
     modbusDataLen: int | float
+    modbusUnitId: int
+    modbusConvertToFloat: str
+    modbusDivisor: int
+    modbusDecimalDigits: int
+    scale: int | float
 
 
 class ModbusConnectorPayload(TypedDict, total=False):
     connectorName: Required[str]
     serviceName: Required[Literal["modbus"]]
     modbusServer: Required[str]
+    modbusProtocol: str
+    modbusServerPort: int
+    modbusDataAddressType: str
+    thingName: str
+    tableName: str
+    enabled: bool
+    description: str
+    unitId: int
     propertyMapList: Required[list[ModbusPropertyMapItem]]
     inputName: str
 
@@ -76,6 +92,14 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "inputName": {"type": "string", "minLength": 1},
             "serviceName": {"type": "string", "const": "modbus"},
             "modbusServer": {"type": "string", "minLength": 1},
+            "modbusProtocol": {"type": "string"},
+            "modbusServerPort": {"type": ["integer", "number"]},
+            "modbusDataAddressType": {"type": "string"},
+            "thingName": {"type": "string", "minLength": 1},
+            "tableName": {"type": "string", "minLength": 1},
+            "enabled": {"type": "boolean"},
+            "description": {"type": "string"},
+            "unitId": {"type": ["integer", "number"]},
             "propertyMapList": {
                 "type": "array",
                 "minItems": 1,
@@ -83,12 +107,20 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
                     "type": "object",
                     "required": ["modbusDataAccess"],
                     "properties": {
+                        "propertyName": {"type": "string", "minLength": 1},
+                        "propertyPath": {"type": "string", "minLength": 1},
                         "modbusDataAccess": {
                             "type": "string",
                             "enum": _MODBUS_DATA_ACCESS_ENUM,
                         },
+                        "modbusDataAddress": {"type": ["integer", "number"]},
                         "modbusDataType": {"type": "string"},
                         "modbusDataLen": {"type": ["integer", "number"]},
+                        "modbusUnitId": {"type": ["integer", "number"]},
+                        "modbusConvertToFloat": {"type": "string"},
+                        "modbusDivisor": {"type": ["integer", "number"]},
+                        "modbusDecimalDigits": {"type": ["integer", "number"]},
+                        "scale": {"type": ["integer", "number"]},
                     },
                 },
             },
@@ -98,8 +130,11 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "inputName": "modbus_energy_input",
             "serviceName": "modbus",
             "modbusServer": "tcp://127.0.0.1:502",
+            "unitId": 1,
             "propertyMapList": [
                 {
+                    "propertyName": "temperature",
+                    "modbusDataAddress": 1199,
                     "modbusDataAccess": "holdingregister",
                     "modbusDataType": "float32",
                     "modbusDataLen": 2,
@@ -269,6 +304,7 @@ def create_server(
                 "preview_details": {
                     "action": action,
                     "target": payload or {},
+                    "forwarded_payload": transform_connector_request(action, payload),
                     "row_estimate": "unknown",
                     "upstream_validated": False,
                     "schema_validated": True,
@@ -283,12 +319,14 @@ def create_server(
 
         schema_validated = validation["status"] == "validated"
         would_succeed: bool | str = True if schema_validated else "unvalidated"
+        forwarded_payload = transform_connector_request(action, payload)
         return {
             "mode": "dry_run",
             "status": "success",
             "tool_name": tool_name,
             "action": action,
             "payload": payload,
+            "forwarded_payload": forwarded_payload,
             "would_succeed": would_succeed,
             "preview": (
                 "Connector change would execute"
@@ -298,6 +336,7 @@ def create_server(
             "preview_details": {
                 "action": action,
                 "target": payload or {},
+                "forwarded_payload": forwarded_payload,
                 "row_estimate": "unknown",
                 "upstream_validated": False,
                 "schema_validated": schema_validated,
@@ -376,7 +415,13 @@ def create_server(
             return {
                 "serviceName": "modbus",
                 "modbusServer": "tcp://127.0.0.1:502",
-                "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+                "propertyMapList": [
+                    {
+                        "propertyName": "temperature",
+                        "modbusDataAccess": "holdingregister",
+                        "modbusDataAddress": 1199,
+                    }
+                ],
             }
 
         def _enum_error(
@@ -410,29 +455,6 @@ def create_server(
                     "propertyMapList": [{"modbusDataAccess": selected_access}]
                 }
             return error
-
-        known_top_level_keys: set[str] = set()
-        schema_properties = schema.get("properties")
-        if isinstance(schema_properties, dict):
-            known_top_level_keys = set(schema_properties.keys())
-
-        unknown_top_level_keys = sorted(set(payload_data.keys()) - known_top_level_keys)
-        if unknown_top_level_keys:
-            corrected_payload = {
-                key: payload_data[key] for key in payload_data if key in known_top_level_keys
-            }
-            errors.append(
-                _validation_error(
-                    path="payload",
-                    reason="unknown_keys",
-                    message="Payload contains unsupported keys for this connector profile",
-                    details={
-                        "unknown_keys": unknown_top_level_keys,
-                        "suggested_known_keys": sorted(known_top_level_keys),
-                        "corrected_snippet": corrected_payload,
-                    },
-                )
-            )
 
         required_keys = schema.get("required", [])
         if isinstance(required_keys, list):
@@ -472,7 +494,13 @@ def create_server(
                             "expected": "array",
                             "received": type(property_map_list).__name__,
                             "corrected_snippet": {
-                                "propertyMapList": [{"modbusDataAccess": "holdingregister"}]
+                                "propertyMapList": [
+                                    {
+                                        "propertyName": "temperature",
+                                        "modbusDataAccess": "holdingregister",
+                                        "modbusDataAddress": 1199,
+                                    }
+                                ]
                             },
                         },
                     )
@@ -493,27 +521,6 @@ def create_server(
                         )
                         continue
 
-                    known_property_map_keys = {
-                        "modbusDataAccess",
-                        "modbusDataType",
-                        "modbusDataLen",
-                    }
-                    unknown_property_map_keys = sorted(set(entry.keys()) - known_property_map_keys)
-                    if unknown_property_map_keys:
-                        errors.append(
-                            _validation_error(
-                                path=f"payload.propertyMapList[{index}]",
-                                reason="unknown_keys",
-                                message=(
-                                    "Property map item contains unsupported keys for modbus profile"
-                                ),
-                                details={
-                                    "unknown_keys": unknown_property_map_keys,
-                                    "suggested_known_keys": sorted(known_property_map_keys),
-                                },
-                            )
-                        )
-
                     access = entry.get("modbusDataAccess")
                     if not isinstance(access, str) or not access.strip():
                         errors.append(
@@ -532,6 +539,45 @@ def create_server(
                                 message="modbusDataAccess must be one of the allowed values",
                                 allowed_values=_MODBUS_DATA_ACCESS_ENUM,
                                 received=access,
+                            )
+                        )
+
+                    address = entry.get("modbusDataAddress")
+                    if not isinstance(address, (int, float)):
+                        errors.append(
+                            _validation_error(
+                                path=f"payload.propertyMapList[{index}].modbusDataAddress",
+                                reason="required",
+                                message="modbusDataAddress is required",
+                            )
+                        )
+
+                    has_property_target = any(
+                        isinstance(entry.get(field), str) and str(entry.get(field)).strip()
+                        for field in ("propertyName", "propertyPath", "tagName")
+                    ) or isinstance(entry.get("tagId"), int)
+                    if not has_property_target:
+                        selected_access = (
+                            access
+                            if isinstance(access, str) and access.strip()
+                            else "holdingregister"
+                        )
+                        errors.append(
+                            _validation_error(
+                                path=f"payload.propertyMapList[{index}]",
+                                reason="required",
+                                message=(
+                                    "Each property map item must include "
+                                    "propertyName, propertyPath, "
+                                    "tagName, or tagId"
+                                ),
+                                details={
+                                    "corrected_snippet": {
+                                        "propertyName": "temperature",
+                                        "modbusDataAccess": selected_access,
+                                        "modbusDataAddress": 1199,
+                                    }
+                                },
                             )
                         )
 
@@ -603,6 +649,51 @@ def create_server(
             input_name = normalized_payload.get("inputName")
             if not isinstance(input_name, str) or not input_name.strip():
                 normalized_payload["inputName"] = connector_name
+
+        service_name = normalized_payload.get("serviceName")
+        if isinstance(service_name, str) and service_name.strip().lower() == "modbus":
+            default_unit_id = normalized_payload.get("unitId")
+            if isinstance(default_unit_id, float) and default_unit_id.is_integer():
+                default_unit_id = int(default_unit_id)
+            if not isinstance(default_unit_id, int):
+                default_unit_id = None
+
+            property_map_list = normalized_payload.get("propertyMapList")
+            if isinstance(property_map_list, list):
+                normalized_entries: list[dict[str, object]] = []
+                for entry in property_map_list:
+                    if not isinstance(entry, dict):
+                        normalized_entries.append(entry)
+                        continue
+
+                    normalized_entry = dict(entry)
+
+                    property_name = normalized_entry.get("propertyName")
+                    if (
+                        isinstance(property_name, str)
+                        and property_name.strip()
+                        and "propertyPath" not in normalized_entry
+                    ):
+                        normalized_entry["propertyPath"] = property_name.strip()
+
+                    if default_unit_id is not None and "modbusUnitId" not in normalized_entry:
+                        normalized_entry["modbusUnitId"] = default_unit_id
+
+                    scale = normalized_entry.get("scale")
+                    if (
+                        isinstance(scale, (int, float))
+                        and scale not in {0, 1}
+                        and "modbusConvertToFloat" not in normalized_entry
+                        and "modbusDivisor" not in normalized_entry
+                    ):
+                        inverse_scale = 1 / float(scale)
+                        if inverse_scale.is_integer() and inverse_scale > 0:
+                            normalized_entry["modbusConvertToFloat"] = "divideByInteger"
+                            normalized_entry["modbusDivisor"] = int(inverse_scale)
+
+                    normalized_entries.append(normalized_entry)
+
+                normalized_payload["propertyMapList"] = normalized_entries
 
         typed_payload = cast(ConnectorPayload, normalized_payload)
 
@@ -1917,6 +2008,10 @@ def create_server(
                         "action": action,
                         "schema_service": validation["service_name"],
                         "normalized_payload": normalized_payload,
+                        "forwarded_payload": transform_connector_request(
+                            action,
+                            normalized_payload,
+                        ),
                         "errors": [],
                     }
                 )
