@@ -321,11 +321,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "tool_name": "create_output",
         "action": "createOutput",
         "payload": {"connectorName": "mqtt_1"},
+        "forwarded_payload": {"connectorName": "mqtt_1"},
         "would_succeed": "unvalidated",
         "preview": "Connector change preview only",
         "preview_details": {
             "action": "createOutput",
             "target": {"connectorName": "mqtt_1"},
+            "forwarded_payload": {"connectorName": "mqtt_1"},
             "row_estimate": "unknown",
             "upstream_validated": False,
             "schema_validated": False,
@@ -353,11 +355,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "tool_name": "create_output",
         "action": "createOutput",
         "payload": {"connectorName": "mqtt_2"},
+        "forwarded_payload": {"connectorName": "mqtt_2"},
         "would_succeed": "unvalidated",
         "preview": "Connector change preview only",
         "preview_details": {
             "action": "createOutput",
             "target": {"connectorName": "mqtt_2"},
+            "forwarded_payload": {"connectorName": "mqtt_2"},
             "row_estimate": "unknown",
             "upstream_validated": False,
             "schema_validated": False,
@@ -440,7 +444,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "connectorName": "modbus_energy_input",
             "serviceName": "modbus",
             "modbusServer": "tcp://127.0.0.1:502",
-            "propertyMapList": [{"modbusDataAccess": "holdingregister"}],
+            "propertyMapList": [
+                {
+                    "propertyName": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                }
+            ],
         },
     )
     assert preflight["mode"] == "preflight"
