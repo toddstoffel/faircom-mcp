@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from threading import Lock
+from threading import RLock
 from typing import Any
 
 import httpx
@@ -30,7 +30,7 @@ class FaircomAPIClient:
         resolved_auth = self._resolve_auth(auth, username=username, password=password, token=token)
         self._max_read_retries = max(0, max_read_retries)
         self._auth = resolved_auth
-        self._session_lock = Lock()
+        self._session_lock = RLock()
         self._session_auth_token: str | None = resolved_auth.token
         client_auth, token_header = self._build_http_auth(resolved_auth)
 

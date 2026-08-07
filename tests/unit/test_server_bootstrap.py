@@ -638,6 +638,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert event_types.count("connector_write_attempt") == 5
     assert event_types.count("connector_write_result") == 3
     assert event_types.count("code_package_write_attempt") == 1
+    assert event_types.count("code_package_write_result") == 1
     assert all("timestamp" in event for event in audit_payload["events"])
     assert {event["details"]["tool"] for event in audit_payload["events"]} == {
         "create_input",

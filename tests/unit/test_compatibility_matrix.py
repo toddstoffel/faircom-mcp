@@ -957,6 +957,13 @@ def test_compatibility_matrix_observability_records_rejected_code_package_attemp
         and event["details"]["confirm_write"] is True
         for event in audit
     )
+    assert any(
+        event["type"] == "code_package_write_result"
+        and event["details"]["tool"] == "register_code_package"
+        and event["details"]["code_name"] == "syntax_probe"
+        and event["details"]["outcome"] == "rejected"
+        for event in audit
+    )
 
 
 def test_compatibility_matrix_describe_inputs_lifts_enabled_and_description(
@@ -976,6 +983,8 @@ def test_compatibility_matrix_describe_inputs_lifts_enabled_and_description(
     first_input = result["inputs"][0]
     assert first_input["enabled"] is False
     assert first_input["description"] == "Boiler room telemetry"
+    assert "enabled" not in first_input["settings"]
+    assert "description" not in first_input["settings"]
 
 
 def test_compatibility_matrix_codepackage_history_status_matches_inactive_rows(

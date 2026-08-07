@@ -1864,8 +1864,10 @@ def create_server(
                         continue
                     if "enabled" not in normalized and "enabled" in container:
                         normalized["enabled"] = container.get("enabled")
+                    container.pop("enabled", None)
                     if "description" not in normalized and "description" in container:
                         normalized["description"] = container.get("description")
+                    container.pop("description", None)
                 return normalized
             return value
 
@@ -3492,6 +3494,35 @@ def create_server(
         normalized_name = code_name.strip()
         normalized_code = code.strip()
         normalized_type = code_type.strip()
+
+        def _record_code_package_write_result(
+            outcome: str,
+            *,
+            extra_details: dict[str, object] | None = None,
+        ) -> None:
+            audit_details: dict[str, object] = {
+                "tool": "register_code_package",
+                "code_name": normalized_name,
+                "operation": "upsert",
+                "outcome": outcome,
+            }
+            if extra_details:
+                audit_details.update(extra_details)
+            audit_log.record(
+                event_type="code_package_write_result",
+                details=audit_details,
+            )
+
+        def _sql_quote_literal(value: str) -> str:
+            return "'" + value.replace("'", "''") + "'"
+
+        select_identity_sql = (
+            "SELECT TOP 1 id FROM codepackage_name "
+            f"WHERE codepackage_name = {_sql_quote_literal(normalized_name)} "
+            f"AND database_name = {_sql_quote_literal(database_name)} "
+            f"AND owner_name = {_sql_quote_literal(owner_name)}"
+        )
+
         audit_log.record(
             event_type="code_package_write_attempt",
             details={
@@ -3505,87 +3536,150 @@ def create_server(
                 "confirm_write": confirm_write,
             },
         )
-        if not normalized_name:
-            raise _validation_failure(
-                tool_name="register_code_package",
-                message="code_name is required",
-                expected_args={"code_name": "string (required)"},
-                received_args={"code_name": code_name},
-                suggested_fix="Provide a non-empty code_name.",
-                example_payload={
-                    "name": "register_code_package",
-                    "arguments": {
-                        "code_name": "decode_mixing_tank",
-                        "code": "function transform(row){ return row; }",
-                        "confirm_write": True,
-                    },
-                },
-            )
-        if not normalized_code:
-            raise _validation_failure(
-                tool_name="register_code_package",
-                message="code is required",
-                expected_args={"code": "string (required)"},
-                received_args={"code": code},
-                suggested_fix="Provide non-empty JavaScript code.",
-                example_payload={
-                    "name": "register_code_package",
-                    "arguments": {
-                        "code_name": "decode_mixing_tank",
-                        "code": "function transform(row){ return row; }",
-                        "confirm_write": True,
-                    },
-                },
-            )
-        if normalized_type not in _CODE_PACKAGE_TYPE_ENUM:
-            raise _validation_failure(
-                tool_name="register_code_package",
-                message="Unsupported code_type",
-                expected_args={"code_type": f"one of {_CODE_PACKAGE_TYPE_ENUM}"},
-                received_args={"code_type": code_type},
-                suggested_fix="Use one of the supported FairCom code package types.",
-                example_payload={
-                    "name": "register_code_package",
-                    "arguments": {
-                        "code_name": "decode_mixing_tank",
-                        "code": "function transform(row){ return row; }",
-                        "code_type": "integrationTableTransform",
-                        "confirm_write": True,
-                    },
-                },
-            )
-
-        # Parse JavaScript at registration time so syntax defects surface before
-        # transform creation and can be attributed to this write action.
-        if language.strip().lower() == "javascript":
-            try:
-                import esprima  # type: ignore[import-untyped]
-
-                esprima.parseScript(normalized_code)
-            except Exception as exc:
-                parser_message = str(exc).strip() or "Unknown JavaScript syntax error"
-                syntax_details: dict[str, object] = {
-                    "code_name": normalized_name,
-                    "language": language,
-                    "parser_message": parser_message,
-                }
-                line_number = getattr(exc, "lineNumber", None)
-                column_number = getattr(exc, "column", None)
-                if isinstance(line_number, int):
-                    syntax_details["line"] = line_number
-                if isinstance(column_number, int):
-                    syntax_details["column"] = column_number
-                line_context = f" at line {line_number}" if isinstance(line_number, int) else ""
+        try:
+            if not normalized_name:
                 raise _validation_failure(
                     tool_name="register_code_package",
-                    message=(
-                        f"JavaScript syntax validation failed{line_context}: {parser_message}"
-                    ),
-                    expected_args={"code": "valid JavaScript source"},
-                    received_args=syntax_details,
+                    message="code_name is required",
+                    expected_args={"code_name": "string (required)"},
+                    received_args={"code_name": code_name},
+                    suggested_fix="Provide a non-empty code_name.",
+                    example_payload={
+                        "name": "register_code_package",
+                        "arguments": {
+                            "code_name": "decode_mixing_tank",
+                            "code": "function transform(row){ return row; }",
+                            "confirm_write": True,
+                        },
+                    },
+                )
+            if not normalized_code:
+                raise _validation_failure(
+                    tool_name="register_code_package",
+                    message="code is required",
+                    expected_args={"code": "string (required)"},
+                    received_args={"code": code},
+                    suggested_fix="Provide non-empty JavaScript code.",
+                    example_payload={
+                        "name": "register_code_package",
+                        "arguments": {
+                            "code_name": "decode_mixing_tank",
+                            "code": "function transform(row){ return row; }",
+                            "confirm_write": True,
+                        },
+                    },
+                )
+            if normalized_type not in _CODE_PACKAGE_TYPE_ENUM:
+                raise _validation_failure(
+                    tool_name="register_code_package",
+                    message="Unsupported code_type",
+                    expected_args={"code_type": f"one of {_CODE_PACKAGE_TYPE_ENUM}"},
+                    received_args={"code_type": code_type},
+                    suggested_fix="Use one of the supported FairCom code package types.",
+                    example_payload={
+                        "name": "register_code_package",
+                        "arguments": {
+                            "code_name": "decode_mixing_tank",
+                            "code": "function transform(row){ return row; }",
+                            "code_type": "integrationTableTransform",
+                            "confirm_write": True,
+                        },
+                    },
+                )
+
+            # Parse JavaScript at registration time so syntax defects surface before
+            # transform creation and can be attributed to this write action.
+            if language.strip().lower() == "javascript":
+                try:
+                    import esprima  # type: ignore[import-untyped]
+
+                    esprima.parseScript(normalized_code)
+                except Exception as exc:
+                    parser_message = str(exc).strip() or "Unknown JavaScript syntax error"
+                    syntax_details: dict[str, object] = {
+                        "code_name": normalized_name,
+                        "language": language,
+                        "parser_message": parser_message,
+                    }
+                    line_number = getattr(exc, "lineNumber", None)
+                    column_number = getattr(exc, "column", None)
+                    if isinstance(line_number, int):
+                        syntax_details["line"] = line_number
+                    if isinstance(column_number, int):
+                        syntax_details["column"] = column_number
+                    line_context = f" at line {line_number}" if isinstance(line_number, int) else ""
+                    raise _validation_failure(
+                        tool_name="register_code_package",
+                        message=(
+                            f"JavaScript syntax validation failed{line_context}: {parser_message}"
+                        ),
+                        expected_args={"code": "valid JavaScript source"},
+                        received_args=syntax_details,
+                        suggested_fix=(
+                            "Fix JavaScript syntax errors"
+                            f"{line_context if line_context else ''} and retry registration."
+                        ),
+                        example_payload={
+                            "name": "register_code_package",
+                            "arguments": {
+                                "code_name": "decode_mixing_tank",
+                                "code": "function transform(row){ return row; }",
+                                "confirm_write": True,
+                            },
+                        },
+                        reason_code="invalid_arguments",
+                    ) from exc
+
+            if dry_run:
+                _record_code_package_write_result(
+                    "previewed",
+                    extra_details={
+                        "dry_run": True,
+                        "execution_status": "not_executed",
+                    },
+                )
+                return {
+                    "mode": "dry_run",
+                    "status": "success",
+                    "tool_name": "register_code_package",
+                    "code_name": normalized_name,
+                    "code_type": normalized_type,
+                    "database_name": database_name,
+                    "owner_name": owner_name,
+                    "execution_status": "not_executed",
+                    "preview": "Code package registration would execute",
+                    "preview_details": {
+                        "lookup_statement": select_identity_sql,
+                        "language": language,
+                        "service_name": service_name,
+                        "code_format": code_format,
+                        "writes": [
+                            "insert codepackage_name when missing",
+                            "insert or update codepackage",
+                            "upsert codepackage_history for current version",
+                        ],
+                    },
+                    "warnings": [
+                        "Dry run is a local preview only and does not call FairCom backend APIs.",
+                    ],
+                    "hint": "Set confirm_write=True to apply code package registration.",
+                }
+
+            if not confirm_write:
+                raise _validation_failure(
+                    tool_name="register_code_package",
+                    message="register_code_package requires confirm_write=True",
+                    expected_args={
+                        "confirm_write": "true for non-dry-run changes",
+                        "dry_run": "true to preview change",
+                    },
+                    received_args={
+                        "code_name": normalized_name,
+                        "confirm_write": confirm_write,
+                        "dry_run": dry_run,
+                    },
                     suggested_fix=(
-                        "Fix JavaScript syntax errors"
-                        f"{line_context if line_context else ''} and retry registration."
+                        "Set confirm_write=true to apply the change or dry_run=true to preview it."
                     ),
                     example_payload={
                         "name": "register_code_package",
@@ -3595,11 +3689,17 @@ def create_server(
                             "confirm_write": True,
                         },
                     },
-                    reason_code="invalid_arguments",
-                ) from exc
-
-        def _sql_quote_literal(value: str) -> str:
-            return "'" + value.replace("'", "''") + "'"
+                    reason_code="missing_write_confirmation",
+                )
+        except ValidationFailure as exc:
+            _record_code_package_write_result(
+                "rejected",
+                extra_details={
+                    "reason_code": exc.details.get("reason_code", "validation_error"),
+                    "error_message": exc.message,
+                },
+            )
+            raise
 
         def _extract_sql_rows(result: object) -> list[dict[str, object]]:
             if not isinstance(result, dict):
@@ -3636,68 +3736,6 @@ def create_server(
         if isinstance(metadata, dict):
             metadata_payload.update(metadata)
         metadata_json = json.dumps(metadata_payload, separators=(",", ":"))
-
-        select_identity_sql = (
-            "SELECT TOP 1 id FROM codepackage_name "
-            f"WHERE codepackage_name = {_sql_quote_literal(normalized_name)} "
-            f"AND database_name = {_sql_quote_literal(database_name)} "
-            f"AND owner_name = {_sql_quote_literal(owner_name)}"
-        )
-
-        if dry_run:
-            return {
-                "mode": "dry_run",
-                "status": "success",
-                "tool_name": "register_code_package",
-                "code_name": normalized_name,
-                "code_type": normalized_type,
-                "database_name": database_name,
-                "owner_name": owner_name,
-                "execution_status": "not_executed",
-                "preview": "Code package registration would execute",
-                "preview_details": {
-                    "lookup_statement": select_identity_sql,
-                    "language": language,
-                    "service_name": service_name,
-                    "code_format": code_format,
-                    "writes": [
-                        "insert codepackage_name when missing",
-                        "insert or update codepackage",
-                        "upsert codepackage_history for current version",
-                    ],
-                },
-                "warnings": [
-                    "Dry run is a local preview only and does not call FairCom backend APIs.",
-                ],
-                "hint": "Set confirm_write=True to apply code package registration.",
-            }
-
-        if not confirm_write:
-            raise _validation_failure(
-                tool_name="register_code_package",
-                message="register_code_package requires confirm_write=True",
-                expected_args={
-                    "confirm_write": "true for non-dry-run changes",
-                    "dry_run": "true to preview change",
-                },
-                received_args={
-                    "code_name": normalized_name,
-                    "confirm_write": confirm_write,
-                    "dry_run": dry_run,
-                },
-                suggested_fix=(
-                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
-                ),
-                example_payload={
-                    "name": "register_code_package",
-                    "arguments": {
-                        "code_name": "decode_mixing_tank",
-                        "code": "function transform(row){ return row; }",
-                        "confirm_write": True,
-                    },
-                },
-                reason_code="missing_write_confirmation",
-            )
 
         def _run_registration() -> dict[str, object]:
             existing_name_rows = _extract_sql_rows(sql_adapter.query(select_identity_sql))
@@ -4509,7 +4547,7 @@ def create_http_app(
     def _extract_json_from_sse(body: bytes) -> dict[str, Any] | None:
         try:
             text = body.decode("utf-8", errors="replace")
-        except Exception:
+        except UnicodeDecodeError:
             return None
 
         for line in text.splitlines():
