@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -269,3 +271,52 @@ def test_admin_action_uses_admin_api_surface() -> None:
 
     assert result == {"ok": True}
     assert any('"api":"admin"' in body for body in seen_bodies)
+
+
+def test_json_action_reauths_and_retries_on_error_code_12031() -> None:
+    create_session_calls = {"count": 0}
+    action_calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode("utf-8"))
+        action = body.get("action")
+        if action == "createSession":
+            create_session_calls["count"] += 1
+            token = f"session-{create_session_calls['count']}"
+            return _response(
+                200,
+                {
+                    "authToken": token,
+                    "result": {"authToken": token},
+                    "errorCode": 0,
+                    "errorMessage": "",
+                },
+                request,
+            )
+
+        action_calls["count"] += 1
+        if action_calls["count"] == 1:
+            assert body.get("authToken") == "session-1"
+            return _response(
+                200,
+                {
+                    "errorCode": 12031,
+                    "errorMessage": "Session expired",
+                },
+                request,
+            )
+
+        assert body.get("authToken") == "session-2"
+        return _response(200, {"ok": True}, request)
+
+    client = FaircomAPIClient(
+        base_url="https://example.test",
+        auth=AuthConfig(username="user", password="pass"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.hub_action("listInputs", {"inputNameLike": "demo%"})
+
+    assert result == {"ok": True}
+    assert create_session_calls["count"] == 2
+    assert action_calls["count"] == 2

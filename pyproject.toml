@@ -12,6 +12,7 @@ authors = [{ name = "FairCom" }]
 dependencies = [
   "fastmcp>=2.10.0",
   "httpx>=0.27.0",
+  "esprima>=4.0.1",
   "pydantic>=2.7.0",
   "python-dotenv>=1.0.1",
   "uvicorn>=0.30.0"

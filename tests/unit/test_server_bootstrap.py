@@ -447,7 +447,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
                     "inputFields": ["*"],
                     "transformStepMethod": "javascript",
                     "outputFields": ["*"],
-                    "transformParams": {"codeName": "decode_mixing_tank"},
+                    "transformParams": {
+                        "codeName": "decode_mixing_tank",
+                        "codeType": "integrationTableTransform",
+                    },
                 }
             ],
         },
@@ -462,6 +465,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         code_name="decode_mixing_tank"
     )
     assert "FROM codepackage_name n" in describe_code_package_result["statement"]
+    assert "c.created_by, c.updated_by, c.code, c.comment" in describe_code_package_result[
+        "statement"
+    ]
 
     register_code_package_dry_run = server.tools["register_code_package"](
         code_name="decode_mixing_tank",
@@ -634,11 +640,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     event_types = [event["type"] for event in audit_payload["events"]]
     assert event_types.count("connector_write_attempt") == 5
     assert event_types.count("connector_write_result") == 3
+    assert event_types.count("code_package_write_attempt") == 1
     assert all("timestamp" in event for event in audit_payload["events"])
     assert {event["details"]["tool"] for event in audit_payload["events"]} == {
         "create_input",
         "create_output",
         "create_transform",
+        "register_code_package",
     }
     assert server.tools["observability_health"]() == {
         "service": "faircom-mcp",
@@ -720,7 +728,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
                         "inputFields": ["*"],
                         "transformStepMethod": "javascript",
                         "outputFields": ["*"],
-                        "transformParams": {"codeName": "decode_mixing_tank"},
+                        "transformParams": {
+                            "codeName": "decode_mixing_tank",
+                            "codeType": "integrationTableTransform",
+                        },
                     }
                 ],
             },

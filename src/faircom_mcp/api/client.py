@@ -192,7 +192,15 @@ class FaircomAPIClient:
         auth_token = self._get_action_auth_token() if include_auth_token else None
         if auth_token is not None:
             body["authToken"] = auth_token
-        return self.request_json("POST", path, json_body=body, idempotent=False)
+        try:
+            return self.request_json("POST", path, json_body=body, idempotent=False)
+        except UpstreamAPIError as exc:
+            if not include_auth_token or not self._is_session_expired_error(exc):
+                raise
+            self._invalidate_session_auth_token()
+            refreshed_body = dict(body)
+            refreshed_body["authToken"] = self._get_action_auth_token()
+            return self.request_json("POST", path, json_body=refreshed_body, idempotent=False)
 
     def admin_action(
         self,
@@ -285,6 +293,17 @@ class FaircomAPIClient:
                 )
             self._session_auth_token = str(token)
             return self._session_auth_token
+
+    def _invalidate_session_auth_token(self) -> None:
+        if self._auth.token:
+            return
+        with self._session_lock:
+            self._session_auth_token = None
+
+    @staticmethod
+    def _is_session_expired_error(exc: UpstreamAPIError) -> bool:
+        error_code = exc.details.get("errorCode")
+        return isinstance(error_code, int) and error_code == 12031
 
     @staticmethod
     def _raise_if_api_error(payload: Any, *, method: str, path: str) -> None:

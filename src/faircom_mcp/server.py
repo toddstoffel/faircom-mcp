@@ -449,6 +449,53 @@ def create_server(
         )
         return result
 
+    def _execute_code_package_write(
+        *,
+        tool_name: str,
+        code_name: str,
+        operation: str,
+        writer: Callable[[], object],
+    ) -> object:
+        try:
+            result = writer()
+        except FaircomError as exc:
+            audit_log.record(
+                event_type="code_package_write_result",
+                details={
+                    "tool": tool_name,
+                    "code_name": code_name,
+                    "operation": operation,
+                    "outcome": "failed",
+                    "error_code": str(exc.code),
+                    "error_message": exc.message,
+                },
+            )
+            raise
+        except Exception as exc:
+            audit_log.record(
+                event_type="code_package_write_result",
+                details={
+                    "tool": tool_name,
+                    "code_name": code_name,
+                    "operation": operation,
+                    "outcome": "failed",
+                    "error_code": "unexpected_exception",
+                    "error_message": str(exc),
+                },
+            )
+            raise
+
+        audit_log.record(
+            event_type="code_package_write_result",
+            details={
+                "tool": tool_name,
+                "code_name": code_name,
+                "operation": operation,
+                "outcome": "success",
+            },
+        )
+        return result
+
     def _validation_failure(
         *,
         tool_name: str,
@@ -1237,9 +1284,9 @@ def create_server(
     def _require_connector_payload(
         *,
         tool_name: str,
-        payload: ConnectorPayload | None,
+        payload: dict[str, object] | None,
         action: str,
-    ) -> ConnectorPayload:
+    ) -> dict[str, object]:
         if payload is None or not payload:
             raise _validation_failure(
                 tool_name=tool_name,
@@ -1453,12 +1500,10 @@ def create_server(
             # Action-level transformService is canonical for forwarding and validation.
             normalized_payload.pop("transformService", None)
 
-        typed_payload = cast(ConnectorPayload, normalized_payload)
-
         validation = _validate_connector_schema(
             tool_name=tool_name,
             action=action,
-            payload=typed_payload,
+            payload=normalized_payload,
         )
         if validation["status"] == "invalid":
             raise _validation_failure(
@@ -1485,7 +1530,7 @@ def create_server(
                 },
             )
 
-        return typed_payload
+        return normalized_payload
 
     def _validate_sql_shape(tool_name: str, statement: str) -> None:
         unsupported = detect_unsupported_features(statement)
@@ -1804,10 +1849,24 @@ def create_server(
 
     @server.tool(name="describe_inputs")
     def describe_inputs(payload: dict[str, object] | None = None) -> object:
+        def _normalize_input_descriptions(value: object) -> object:
+            if isinstance(value, list):
+                return [_normalize_input_descriptions(item) for item in value]
+            if isinstance(value, dict):
+                normalized = {key: _normalize_input_descriptions(nested) for key, nested in value.items()}
+                settings = normalized.get("settings")
+                if isinstance(settings, dict):
+                    if "enabled" not in normalized and "enabled" in settings:
+                        normalized["enabled"] = settings.get("enabled")
+                    if "description" not in normalized and "description" in settings:
+                        normalized["description"] = settings.get("description")
+                return normalized
+            return value
+
         return _run_tool(
             "describe_inputs",
             "metadata",
-            lambda: connector_adapter.describe_inputs(payload),
+            lambda: _normalize_input_descriptions(connector_adapter.describe_inputs(payload)),
         )
 
     @server.tool(name="describeInputs")
@@ -1816,7 +1875,7 @@ def create_server(
 
     @server.tool(name="create_input")
     def create_input(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1893,7 +1952,7 @@ def create_server(
 
     @server.tool(name="createInput")
     def create_input_alias(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1901,7 +1960,7 @@ def create_server(
 
     @server.tool(name="alter_input")
     def alter_input(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1978,7 +2037,7 @@ def create_server(
 
     @server.tool(name="alterInput")
     def alter_input_alias(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -1986,7 +2045,7 @@ def create_server(
 
     @server.tool(name="delete_input")
     def delete_input(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -2063,7 +2122,7 @@ def create_server(
 
     @server.tool(name="deleteInput")
     def delete_input_alias(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -2095,7 +2154,7 @@ def create_server(
 
     @server.tool(name="create_output")
     def create_output(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -2172,7 +2231,7 @@ def create_server(
 
     @server.tool(name="createOutput")
     def create_output_alias(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -2180,7 +2239,7 @@ def create_server(
 
     @server.tool(name="alter_output")
     def alter_output(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -2257,7 +2316,7 @@ def create_server(
 
     @server.tool(name="alterOutput")
     def alter_output_alias(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -2265,7 +2324,7 @@ def create_server(
 
     @server.tool(name="delete_output")
     def delete_output(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -2342,7 +2401,7 @@ def create_server(
 
     @server.tool(name="deleteOutput")
     def delete_output_alias(
-        payload: ConnectorPayload | None = None,
+        payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
@@ -2395,12 +2454,12 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="create_transform",
                     action="createTransform",
-                    payload=cast(ConnectorPayload | None, payload),
+                    payload=payload,
                 ),
             )
         resolved_payload = _require_connector_payload(
             tool_name="create_transform",
-            payload=cast(ConnectorPayload | None, payload),
+            payload=payload,
             action="createTransform",
         )
         if not confirm_write:
@@ -2480,12 +2539,12 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="alter_transform",
                     action="alterTransform",
-                    payload=cast(ConnectorPayload | None, payload),
+                    payload=payload,
                 ),
             )
         resolved_payload = _require_connector_payload(
             tool_name="alter_transform",
-            payload=cast(ConnectorPayload | None, payload),
+            payload=payload,
             action="alterTransform",
         )
         if not confirm_write:
@@ -2565,12 +2624,12 @@ def create_server(
                 lambda: _connector_preview(
                     tool_name="delete_transform",
                     action="deleteTransform",
-                    payload=cast(ConnectorPayload | None, payload),
+                    payload=payload,
                 ),
             )
         resolved_payload = _require_connector_payload(
             tool_name="delete_transform",
-            payload=cast(ConnectorPayload | None, payload),
+            payload=payload,
             action="deleteTransform",
         )
         if not confirm_write:
@@ -3015,7 +3074,11 @@ def create_server(
 
     @server.tool(name="validate_connector_payloads")
     def validate_connector_payloads(
-        action: Literal[
+        action: str = "createInput",
+        payload: dict[str, object] | None = None,
+        payloads: list[dict[str, object]] | None = None,
+    ) -> object:
+        allowed_actions = {
             "createInput",
             "alterInput",
             "deleteInput",
@@ -3025,10 +3088,45 @@ def create_server(
             "createTransform",
             "alterTransform",
             "deleteTransform",
-        ] = "createInput",
-        payload: dict[str, object] | None = None,
-        payloads: list[dict[str, object]] | None = None,
-    ) -> object:
+        }
+        if action not in allowed_actions:
+            raise _validation_failure(
+                tool_name="validate_connector_payloads",
+                message="Unsupported action for preflight",
+                expected_args={
+                    "action": (
+                        "one of createInput/alterInput/deleteInput/"
+                        "createOutput/alterOutput/deleteOutput/"
+                        "createTransform/alterTransform/deleteTransform"
+                    ),
+                    "payload": "object (optional, single preflight)",
+                    "payloads": "array<object> (optional, batch preflight)",
+                },
+                received_args={"action": action, "payload": payload, "payloads": payloads},
+                suggested_fix="Use one of the supported connector actions for preflight.",
+                example_payload={
+                    "name": "validate_connector_payloads",
+                    "arguments": {
+                        "action": "createTransform",
+                        "payload": {
+                            "transformName": "inline_decode_asset01",
+                            "serviceName": "javascript",
+                            "transformActions": [
+                                {
+                                    "transformService": "v8TransformService",
+                                    "inputFields": ["*"],
+                                    "transformStepMethod": "javascript",
+                                    "outputFields": ["*"],
+                                    "transformParams": {
+                                        "script": "function transform(row){ return row; }"
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                },
+            )
+
         if payload is not None and payloads is not None:
             raise _validation_failure(
                 tool_name="validate_connector_payloads",
@@ -3339,7 +3437,7 @@ def create_server(
         statement = (
             "SELECT TOP 1 n.id, n.codepackage_name, n.database_name, n.owner_name, "
             "c.version, c.active, c.status, c.type, c.language, c.service_name, c.code_format, "
-            "c.created_by, c.updated_by, c.comment, c.description, c.metadata "
+            "c.created_by, c.updated_by, c.code, c.comment, c.description, c.metadata "
             "FROM codepackage_name n "
             "LEFT JOIN codepackage c ON c.codepackage_id = n.id "
             f"WHERE n.codepackage_name = {_sql_quote_literal(normalized_code_name)} "
@@ -3435,6 +3533,56 @@ def create_server(
                     },
                 },
             )
+
+        # Parse JavaScript at registration time so syntax defects surface before
+        # transform creation and can be attributed to this write action.
+        if language.strip().lower() == "javascript":
+            try:
+                import esprima  # type: ignore[import-not-found]
+
+                esprima.parseScript(normalized_code)
+            except Exception as exc:
+                syntax_details: dict[str, object] = {
+                    "code_name": normalized_name,
+                    "language": language,
+                    "error": str(exc),
+                }
+                line_number = getattr(exc, "lineNumber", None)
+                column_number = getattr(exc, "column", None)
+                if isinstance(line_number, int):
+                    syntax_details["line"] = line_number
+                if isinstance(column_number, int):
+                    syntax_details["column"] = column_number
+                raise _validation_failure(
+                    tool_name="register_code_package",
+                    message="JavaScript syntax validation failed for code",
+                    expected_args={"code": "valid JavaScript source"},
+                    received_args=syntax_details,
+                    suggested_fix="Fix JavaScript syntax errors and retry registration.",
+                    example_payload={
+                        "name": "register_code_package",
+                        "arguments": {
+                            "code_name": "decode_mixing_tank",
+                            "code": "function transform(row){ return row; }",
+                            "confirm_write": True,
+                        },
+                    },
+                    reason_code="invalid_arguments",
+                ) from exc
+
+        audit_log.record(
+            event_type="code_package_write_attempt",
+            details={
+                "tool": "register_code_package",
+                "operation": "upsert",
+                "code_name": normalized_name,
+                "database_name": database_name,
+                "owner_name": owner_name,
+                "code_type": normalized_type,
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
+        )
 
         def _sql_quote_literal(value: str) -> str:
             return "'" + value.replace("'", "''") + "'"
@@ -3616,6 +3764,12 @@ def create_server(
                 f"WHERE codepackage_id = {codepackage_id} AND version = {next_version}"
             )
             sql_adapter.execute(delete_history_sql)
+            deactivate_history_sql = (
+                "UPDATE codepackage_history "
+                "SET active = 0 "
+                f"WHERE codepackage_id = {codepackage_id}"
+            )
+            sql_adapter.execute(deactivate_history_sql)
             insert_history_sql = (
                 "INSERT INTO codepackage_history ("
                 "codepackage_id, version, active, status, cloned_codepackage_id, "
@@ -3647,7 +3801,12 @@ def create_server(
                 "errorMessage": "",
             }
 
-        result = _run_tool("register_code_package", "write", _run_registration)
+        result = _execute_code_package_write(
+            tool_name="register_code_package",
+            code_name=normalized_name,
+            operation="upsert",
+            writer=lambda: _run_tool("register_code_package", "write", _run_registration),
+        )
         if isinstance(result, dict):
             enriched = dict(result)
             enriched.update(

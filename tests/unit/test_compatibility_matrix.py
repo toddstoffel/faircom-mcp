@@ -113,6 +113,36 @@ def test_compatibility_matrix_connector_payload_required(monkeypatch: object) ->
     assert exc.value.details["received_args"]["payload"] == {}
 
 
+def test_compatibility_matrix_validate_connector_payloads_rejects_unknown_action(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["validate_connector_payloads"](
+            action="createTransformX",
+            payload={
+                "transformName": "inline_decode_asset01",
+                "serviceName": "javascript",
+                "transformActions": [
+                    {
+                        "transformService": "v8TransformService",
+                        "inputFields": ["*"],
+                        "transformStepMethod": "javascript",
+                        "outputFields": ["*"],
+                        "transformParams": {
+                            "script": "function transform(row){ return row; }",
+                        },
+                    }
+                ],
+            },
+        )
+
+    assert exc.value.details["tool_name"] == "validate_connector_payloads"
+    assert exc.value.details["reason_code"] == "invalid_arguments"
+    assert "unsupported action" in exc.value.message.lower()
+
+
 def test_compatibility_matrix_modbus_schema_validation_on_write(monkeypatch: object) -> None:
     server = _make_server(monkeypatch)
 
@@ -829,3 +859,24 @@ def test_compatibility_matrix_audit_records_outcome_target_and_timestamp(
     assert attempt["details"]["target"] == "modbus_input"
     assert result["details"]["outcome"] == "success"
     assert result["details"]["target"] == "modbus_input"
+
+
+def test_compatibility_matrix_observability_records_code_package_write_attempt(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["register_code_package"](
+        code_name="decode_mixing_tank",
+        code="function transform(row){ return row; }",
+        dry_run=True,
+    )
+
+    assert result["status"] == "success"
+    audit = server.tools["observability_audit"]()["events"]
+    assert any(
+        event["type"] == "code_package_write_attempt"
+        and event["details"]["tool"] == "register_code_package"
+        and event["details"]["code_name"] == "decode_mixing_tank"
+        for event in audit
+    )
