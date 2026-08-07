@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from threading import Lock
 from typing import Any
@@ -132,15 +133,44 @@ class FaircomAPIClient:
                 continue
 
             if response.status_code >= 400:
+                details: dict[str, object] = {
+                    "method": method_upper,
+                    "path": path,
+                    "status_code": response.status_code,
+                    "body": response.text[:2000],
+                }
+                try:
+                    error_payload = response.json()
+                except ValueError:
+                    error_payload = None
+
+                if isinstance(error_payload, dict):
+                    error_code = self._coerce_error_code(error_payload.get("errorCode"))
+                    if error_code is not None:
+                        details["errorCode"] = error_code
+                    error_message = error_payload.get("errorMessage")
+                    if isinstance(error_message, str):
+                        details["errorMessage"] = error_message
+                    debug_info = error_payload.get("debugInfo")
+                    request_info = (
+                        debug_info.get("request") if isinstance(debug_info, dict) else None
+                    )
+                    if isinstance(request_info, dict):
+                        details["request"] = request_info
+                        request_action = request_info.get("action")
+                        request_api = request_info.get("api")
+                        if isinstance(request_action, str):
+                            details["request_action"] = request_action
+                        if isinstance(request_api, str):
+                            details["request_api"] = request_api
+
                 raise UpstreamAPIError(
                     "FairCom API returned an error",
-                    details={
-                        "method": method_upper,
-                        "path": path,
-                        "status_code": response.status_code,
-                        "body": response.text[:2000],
-                    },
-                    retryable=response.status_code >= 500,
+                    details=details,
+                    retryable=(
+                        response.status_code >= 500
+                        or details.get("errorCode") == 12031
+                    ),
                 )
 
             try:
@@ -302,8 +332,32 @@ class FaircomAPIClient:
 
     @staticmethod
     def _is_session_expired_error(exc: UpstreamAPIError) -> bool:
-        error_code = exc.details.get("errorCode")
-        return isinstance(error_code, int) and error_code == 12031
+        direct_error_code = FaircomAPIClient._coerce_error_code(exc.details.get("errorCode"))
+        if direct_error_code == 12031:
+            return True
+
+        raw_body = exc.details.get("body")
+        if not isinstance(raw_body, str) or not raw_body.strip():
+            return False
+        try:
+            body_payload = json.loads(raw_body)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(body_payload, dict):
+            return False
+        body_error_code = FaircomAPIClient._coerce_error_code(body_payload.get("errorCode"))
+        return body_error_code == 12031
+
+    @staticmethod
+    def _coerce_error_code(value: object) -> int | None:
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                return None
+        return None
 
     @staticmethod
     def _raise_if_api_error(payload: Any, *, method: str, path: str) -> None:

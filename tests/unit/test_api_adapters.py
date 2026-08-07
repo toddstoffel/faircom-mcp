@@ -240,6 +240,52 @@ def test_connector_adapter_prefers_explicit_top_level_modbus_over_existing_setti
     ]
 
 
+def test_connector_adapter_preserves_enabled_and_description_top_level_for_modbus() -> None:
+    client = StubClient()
+    adapter = ConnectorAdapter(cast(Any, client))
+
+    adapter.create_input(
+        {
+            "connectorName": "modbus_1",
+            "serviceName": "modbus",
+            "tableName": "modbusTableTCP",
+            "enabled": False,
+            "description": "Boiler room telemetry",
+            "propertyMapList": [
+                {
+                    "propertyPath": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                }
+            ],
+        }
+    )
+
+    assert client.calls == [
+        (
+            "hub:createInput",
+            {
+                "inputName": "modbus_1",
+                "serviceName": "modbus",
+                "tableName": "modbusTableTCP",
+                "enabled": False,
+                "description": "Boiler room telemetry",
+                "settings": {
+                    "enabled": False,
+                    "description": "Boiler room telemetry",
+                    "propertyMapList": [
+                        {
+                            "propertyPath": "temperature",
+                            "modbusDataAccess": "holdingregister",
+                            "modbusDataAddress": 1199,
+                        }
+                    ],
+                },
+            },
+        )
+    ]
+
+
 def test_table_adapter_extracts_columns_and_indexes() -> None:
     client = StubClient()
     adapter = TableAdapter(cast(Any, client))

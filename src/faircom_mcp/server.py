@@ -1857,12 +1857,20 @@ def create_server(
                     key: _normalize_input_descriptions(nested)
                     for key, nested in value.items()
                 }
-                settings = normalized.get("settings")
-                if isinstance(settings, dict):
-                    if "enabled" not in normalized and "enabled" in settings:
-                        normalized["enabled"] = settings.get("enabled")
-                    if "description" not in normalized and "description" in settings:
-                        normalized["description"] = settings.get("description")
+                for container_name in (
+                    "settings",
+                    "config",
+                    "configuration",
+                    "options",
+                    "inputSettings",
+                ):
+                    container = normalized.get(container_name)
+                    if not isinstance(container, dict):
+                        continue
+                    if "enabled" not in normalized and "enabled" in container:
+                        normalized["enabled"] = container.get("enabled")
+                    if "description" not in normalized and "description" in container:
+                        normalized["description"] = container.get("description")
                 return normalized
             return value
 
@@ -3489,6 +3497,19 @@ def create_server(
         normalized_name = code_name.strip()
         normalized_code = code.strip()
         normalized_type = code_type.strip()
+        audit_log.record(
+            event_type="code_package_write_attempt",
+            details={
+                "tool": "register_code_package",
+                "operation": "upsert",
+                "code_name": normalized_name,
+                "database_name": database_name,
+                "owner_name": owner_name,
+                "code_type": normalized_type,
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
+        )
         if not normalized_name:
             raise _validation_failure(
                 tool_name="register_code_package",
@@ -3547,10 +3568,11 @@ def create_server(
 
                 esprima.parseScript(normalized_code)
             except Exception as exc:
+                parser_message = str(exc).strip() or "Unknown JavaScript syntax error"
                 syntax_details: dict[str, object] = {
                     "code_name": normalized_name,
                     "language": language,
-                    "error": str(exc),
+                    "parser_message": parser_message,
                 }
                 line_number = getattr(exc, "lineNumber", None)
                 column_number = getattr(exc, "column", None)
@@ -3558,12 +3580,19 @@ def create_server(
                     syntax_details["line"] = line_number
                 if isinstance(column_number, int):
                     syntax_details["column"] = column_number
+                line_context = f" at line {line_number}" if isinstance(line_number, int) else ""
                 raise _validation_failure(
                     tool_name="register_code_package",
-                    message="JavaScript syntax validation failed for code",
+                    message=(
+                        "JavaScript syntax validation failed"
+                        f"{line_context}: {parser_message}"
+                    ),
                     expected_args={"code": "valid JavaScript source"},
                     received_args=syntax_details,
-                    suggested_fix="Fix JavaScript syntax errors and retry registration.",
+                    suggested_fix=(
+                        "Fix JavaScript syntax errors"
+                        f"{line_context if line_context else ''} and retry registration."
+                    ),
                     example_payload={
                         "name": "register_code_package",
                         "arguments": {
@@ -3574,20 +3603,6 @@ def create_server(
                     },
                     reason_code="invalid_arguments",
                 ) from exc
-
-        audit_log.record(
-            event_type="code_package_write_attempt",
-            details={
-                "tool": "register_code_package",
-                "operation": "upsert",
-                "code_name": normalized_name,
-                "database_name": database_name,
-                "owner_name": owner_name,
-                "code_type": normalized_type,
-                "dry_run": dry_run,
-                "confirm_write": confirm_write,
-            },
-        )
 
         def _sql_quote_literal(value: str) -> str:
             return "'" + value.replace("'", "''") + "'"
@@ -3778,7 +3793,7 @@ def create_server(
             sql_adapter.execute(delete_history_sql)
             deactivate_history_sql = (
                 "UPDATE codepackage_history "
-                "SET active = 0 "
+                "SET active = 0, status = 'inactive' "
                 f"WHERE codepackage_id = {codepackage_id}"
             )
             sql_adapter.execute(deactivate_history_sql)
@@ -3881,10 +3896,26 @@ def create_server(
 
     @server.tool(name="capabilities_summary")
     def capabilities_summary() -> object:
+        def _strip_tool_aliases(payload: dict[str, object]) -> dict[str, object]:
+            tools = payload.get("tools")
+            if not isinstance(tools, list):
+                return payload
+            stripped_payload = dict(payload)
+            stripped_tools: list[object] = []
+            for tool in tools:
+                if isinstance(tool, dict):
+                    stripped_tool = dict(tool)
+                    stripped_tool.pop("aliases", None)
+                    stripped_tools.append(stripped_tool)
+                else:
+                    stripped_tools.append(tool)
+            stripped_payload["tools"] = stripped_tools
+            return stripped_payload
+
         return _run_tool(
             "capabilities_summary",
             "admin",
-            lambda: {
+            lambda: _strip_tool_aliases({
                 "service": {
                     "name": "faircom-mcp",
                     "version": __version__,
@@ -4222,7 +4253,7 @@ def create_server(
                     "audit_logging": True,
                     "observability": resolved_config.observability.enable_metrics,
                 },
-            },
+            }),
         )
 
     @server.tool(name="observability_metrics")

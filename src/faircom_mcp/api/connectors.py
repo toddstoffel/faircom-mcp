@@ -22,6 +22,8 @@ _MODBUS_SETTINGS_KEYS = {
     "transformName",
     "disableTransformSteps",
     "dataCollectionIntervalMilliseconds",
+    "enabled",
+    "description",
     "propertyMapList",
 }
 
@@ -29,6 +31,8 @@ _MODBUS_SETTINGS_MIRROR_ONLY_KEYS = {
     "transformName",
     "dataCollectionIntervalMilliseconds",
     "disableTransformSteps",
+    "enabled",
+    "description",
 }
 
 

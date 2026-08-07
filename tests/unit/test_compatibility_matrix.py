@@ -39,6 +39,53 @@ class _CaptureConnectors:
         return {"action": "deleteInput", "payload": payload}
 
 
+class _DescribeInputsWithSettings:
+    def list_inputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+        return {"inputs": [], "payload": payload}
+
+    def describe_inputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+        _ = payload
+        return {
+            "inputs": [
+                {
+                    "inputName": "modbus_energy_input",
+                    "serviceName": "modbus",
+                    "settings": {
+                        "enabled": False,
+                        "description": "Boiler room telemetry",
+                    },
+                }
+            ]
+        }
+
+
+class _CaptureCodePackageSql(BasicFakeSQL):
+    def __init__(self) -> None:
+        self.query_statements: list[str] = []
+        self.execute_statements: list[str] = []
+
+    def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
+        _ = params
+        self.query_statements.append(statement)
+        if "SELECT TOP 1 id FROM codepackage_name" in statement:
+            return {"result": {"data": [{"id": 9}]}}
+        if "SELECT TOP 1 codepackage_id, version FROM codepackage" in statement:
+            return {"result": {"data": [{"codepackage_id": 9, "version": 1}]}}
+        return {"result": {"data": []}}
+
+    def execute(
+        self,
+        statement: str,
+        params: list[object] | None = None,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, object]:
+        _ = params
+        _ = dry_run
+        self.execute_statements.append(statement)
+        return {"ok": True}
+
+
 def test_compatibility_matrix_strict_canonical_sql_query(monkeypatch: object) -> None:
     server = _make_server(monkeypatch)
 
@@ -881,4 +928,78 @@ def test_compatibility_matrix_observability_records_code_package_write_attempt(
         and event["details"]["tool"] == "register_code_package"
         and event["details"]["code_name"] == "decode_mixing_tank"
         for event in audit
+    )
+
+
+def test_compatibility_matrix_observability_records_rejected_code_package_attempt(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["register_code_package"](
+            code_name="syntax_probe",
+            code="function transform(row) { return row ",
+            confirm_write=True,
+        )
+
+    assert "JavaScript syntax validation failed" in exc.value.message
+    received_args = exc.value.details["received_args"]
+    assert received_args["code_name"] == "syntax_probe"
+    assert "parser_message" in received_args
+    assert isinstance(received_args.get("line"), int)
+
+    audit = server.tools["observability_audit"]()["events"]
+    assert any(
+        event["type"] == "code_package_write_attempt"
+        and event["details"]["tool"] == "register_code_package"
+        and event["details"]["code_name"] == "syntax_probe"
+        and event["details"]["confirm_write"] is True
+        for event in audit
+    )
+
+
+def test_compatibility_matrix_describe_inputs_lifts_enabled_and_description(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=_DescribeInputsWithSettings(),
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["describe_inputs"](payload={"connectorNames": ["modbus_energy_input"]})
+    first_input = result["inputs"][0]
+    assert first_input["enabled"] is False
+    assert first_input["description"] == "Boiler room telemetry"
+
+
+def test_compatibility_matrix_codepackage_history_status_matches_inactive_rows(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+    sql_adapter = _CaptureCodePackageSql()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=sql_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["register_code_package"](
+        code_name="decode_mixing_tank",
+        code="function transform(row){ return row; }",
+        confirm_write=True,
+    )
+
+    assert result["result"]["version"] == 2
+    assert any(
+        "UPDATE codepackage_history SET active = 0, status = 'inactive' WHERE codepackage_id = 9"
+        in statement
+        for statement in sql_adapter.execute_statements
     )

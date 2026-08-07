@@ -600,7 +600,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         for tool in capabilities["tools"]
     )
     assert any(
-        tool["name"] == "create_input" and tool.get("aliases") == ["createInput"]
+        tool["name"] == "create_input" and "aliases" not in tool
         for tool in capabilities["tools"]
     )
     assert any(
@@ -612,21 +612,19 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         for tool in capabilities["tools"]
     )
     assert any(
-        tool["name"] == "list_code_packages" and tool.get("aliases") == ["listCodePackages"]
+        tool["name"] == "list_code_packages" and "aliases" not in tool
         for tool in capabilities["tools"]
     )
     assert any(
-        tool["name"] == "describe_code_package"
-        and tool.get("aliases") == ["describeCodePackage"]
+        tool["name"] == "describe_code_package" and "aliases" not in tool
         for tool in capabilities["tools"]
     )
     assert any(
-        tool["name"] == "register_code_package"
-        and tool.get("aliases") == ["registerCodePackage"]
+        tool["name"] == "register_code_package" and "aliases" not in tool
         for tool in capabilities["tools"]
     )
     assert any(
-        tool["name"] == "create_transform" and tool.get("aliases") == ["createTransform"]
+        tool["name"] == "create_transform" and "aliases" not in tool
         for tool in capabilities["tools"]
     )
     metrics_payload = server.tools["observability_metrics"]()
