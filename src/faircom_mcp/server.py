@@ -547,7 +547,7 @@ def create_server(
         *,
         tool_name: str,
         action: str,
-        payload: ConnectorPayload | None,
+        payload: dict[str, object] | None,
     ) -> dict[str, object]:
         normalized_payload = payload
         try:
@@ -660,7 +660,7 @@ def create_server(
         *,
         tool_name: str,
         action: str,
-        payload: ConnectorPayload | None,
+        payload: dict[str, object] | None,
     ) -> dict[str, object]:
         _ = tool_name
         if not payload:
@@ -1853,7 +1853,10 @@ def create_server(
             if isinstance(value, list):
                 return [_normalize_input_descriptions(item) for item in value]
             if isinstance(value, dict):
-                normalized = {key: _normalize_input_descriptions(nested) for key, nested in value.items()}
+                normalized = {
+                    key: _normalize_input_descriptions(nested)
+                    for key, nested in value.items()
+                }
                 settings = normalized.get("settings")
                 if isinstance(settings, dict):
                     if "enabled" not in normalized and "enabled" in settings:
@@ -3217,7 +3220,7 @@ def create_server(
                 },
             )
 
-        items: list[object] = payloads if payloads is not None else [payload]
+        items: list[object] = cast(list[object], payloads) if payloads is not None else [payload]
 
         def _sanitize_jsonish(value: object, *, depth: int = 0) -> object:
             if depth > 8:
@@ -3234,7 +3237,9 @@ def create_server(
                 return sanitized
             return str(value)
 
-        def _coerce_validation_errors(raw_errors: object, *, fallback: str) -> list[dict[str, object]]:
+        def _coerce_validation_errors(
+            raw_errors: object, *, fallback: str
+        ) -> list[dict[str, object]]:
             if not isinstance(raw_errors, list):
                 return [
                     {
@@ -3538,7 +3543,7 @@ def create_server(
         # transform creation and can be attributed to this write action.
         if language.strip().lower() == "javascript":
             try:
-                import esprima  # type: ignore[import-not-found]
+                import esprima  # type: ignore[import-untyped]
 
                 esprima.parseScript(normalized_code)
             except Exception as exc:
@@ -3614,7 +3619,7 @@ def create_server(
                     return None
             return None
 
-        metadata_payload = {
+        metadata_payload: dict[str, object] = {
             "codeType": normalized_type,
             "owner": owner_name,
             "database": database_name,
@@ -3671,7 +3676,10 @@ def create_server(
                     "confirm_write": confirm_write,
                     "dry_run": dry_run,
                 },
-                suggested_fix="Set confirm_write=true to apply the change or dry_run=true to preview it.",
+                suggested_fix=(
+                    "Set confirm_write=true to apply the change or dry_run=true "
+                    "to preview it."
+                ),
                 example_payload={
                     "name": "register_code_package",
                     "arguments": {
@@ -3685,7 +3693,11 @@ def create_server(
 
         def _run_registration() -> dict[str, object]:
             existing_name_rows = _extract_sql_rows(sql_adapter.query(select_identity_sql))
-            codepackage_id = _as_int(existing_name_rows[0].get("id")) if existing_name_rows else None
+            codepackage_id = (
+                _as_int(existing_name_rows[0].get("id"))
+                if existing_name_rows
+                else None
+            )
             name_inserted = False
 
             if codepackage_id is None:
@@ -4155,7 +4167,10 @@ def create_server(
                         "risk_level": "low",
                         "idempotent": True,
                         "stability": "stable",
-                        "description": "Describe a registered code package and active revision metadata.",
+                        "description": (
+                            "Describe a registered code package and active "
+                            "revision metadata."
+                        ),
                     },
                     {
                         "name": "register_code_package",
@@ -4164,7 +4179,10 @@ def create_server(
                         "risk_level": "critical",
                         "idempotent": False,
                         "stability": "stable",
-                        "description": "Create or update a code package and maintain codepackage history.",
+                        "description": (
+                            "Create or update a code package and maintain "
+                            "codepackage history."
+                        ),
                     },
                     {
                         "name": "alter_transform",

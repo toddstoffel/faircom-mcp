@@ -593,7 +593,9 @@ def test_compatibility_matrix_transform_methods_require_output_fields_and_mappin
     )
 
 
-def test_compatibility_matrix_transform_preflight_accepts_inline_script(monkeypatch: object) -> None:
+def test_compatibility_matrix_transform_preflight_accepts_inline_script(
+    monkeypatch: object,
+) -> None:
     server = _make_server(monkeypatch)
 
     result = server.tools["validate_connector_payloads"](
