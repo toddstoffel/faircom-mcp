@@ -226,6 +226,12 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "get_usage_contract",
         "describe_connector_schema",
         "validate_connector_payloads",
+        "list_code_packages",
+        "listCodePackages",
+        "describe_code_package",
+        "describeCodePackage",
+        "register_code_package",
+        "registerCodePackage",
         "runtime_status",
         "capabilities_summary",
         "observability_metrics",
@@ -449,6 +455,21 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "confirm_write_required": True,
         "mutation_applied": True,
     }
+    list_code_packages_result = server.tools["list_code_packages"]()
+    assert "SELECT TOP 200 id, codepackage_name" in list_code_packages_result["statement"]
+
+    describe_code_package_result = server.tools["describe_code_package"](
+        code_name="decode_mixing_tank"
+    )
+    assert "FROM codepackage_name n" in describe_code_package_result["statement"]
+
+    register_code_package_dry_run = server.tools["register_code_package"](
+        code_name="decode_mixing_tank",
+        code="function transform(row){ return row; }",
+        dry_run=True,
+    )
+    assert register_code_package_dry_run["status"] == "success"
+    assert register_code_package_dry_run["execution_status"] == "not_executed"
 
     assert server.tools["sql_query"](
         sql="select * from demo",
@@ -488,6 +509,22 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "payload",
         "payloads",
     ]
+    assert usage_contract["canonical_arg_keys"]["register_code_package"] == [
+        "code_name",
+        "code",
+        "code_type",
+        "language",
+        "service_name",
+        "code_format",
+        "database_name",
+        "owner_name",
+        "created_by",
+        "comment",
+        "description",
+        "metadata",
+        "confirm_write",
+        "dry_run",
+    ]
     create_input_example = usage_contract["minimal_payload_examples"]["create_input"]["arguments"][
         "payload"
     ]
@@ -502,6 +539,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert (
         usage_contract["example_validity"]["create_transform"] == "requires_existing_code_package"
     )
+    assert usage_contract["example_validity"]["register_code_package"] == "complete"
     assert "modbus" in usage_contract["connector_payload_profiles"]
     assert "mqtt" in usage_contract["connector_payload_profiles"]
     assert "javascript" in usage_contract["connector_payload_profiles"]
@@ -565,6 +603,20 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     )
     assert any(
         tool["name"] == "validate_connector_payloads" and tool["group"] == "admin"
+        for tool in capabilities["tools"]
+    )
+    assert any(
+        tool["name"] == "list_code_packages" and tool.get("aliases") == ["listCodePackages"]
+        for tool in capabilities["tools"]
+    )
+    assert any(
+        tool["name"] == "describe_code_package"
+        and tool.get("aliases") == ["describeCodePackage"]
+        for tool in capabilities["tools"]
+    )
+    assert any(
+        tool["name"] == "register_code_package"
+        and tool.get("aliases") == ["registerCodePackage"]
         for tool in capabilities["tools"]
     )
     assert any(
@@ -674,7 +726,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             },
         ),
     ]
-    assert sql_query_calls == [("select * from demo", [1, "two"])]
+    assert len(sql_query_calls) == 3
+    assert "FROM codepackage_name" in sql_query_calls[0][0]
+    assert "LEFT JOIN codepackage" in sql_query_calls[1][0]
+    assert sql_query_calls[2] == ("select * from demo", [1, "two"])
     assert sql_query_page_calls == [("select * from demo order by id", ["active"], 3, 50)]
     assert sql_execute_calls == [
         ("update demo set flag = 1", ["x"]),

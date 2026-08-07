@@ -44,6 +44,18 @@ _MODBUS_DATA_TYPE_ENUM = [
     "bitBoolean",
 ]
 
+_CODE_PACKAGE_TYPE_ENUM = [
+    "integrationTableTransform",
+    "expression",
+    "getRecordsTransform",
+    "globalFunction",
+    "module",
+    "event",
+    "beforeTrigger",
+    "afterTrigger",
+    "job",
+]
+
 _MODBUS_ALLOWED_PAYLOAD_KEYS = {
     "connectorName",
     "inputName",
@@ -285,6 +297,7 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
                     "outputFields": ["*"],
                     "transformParams": {
                         "codeName": "decode_mixing_tank",
+                        "codeType": "integrationTableTransform",
                     },
                 }
             ],
@@ -809,7 +822,25 @@ def create_server(
                                 if isinstance(transform_params, dict)
                                 else None
                             )
-                            if not isinstance(code_name, str) or not code_name.strip():
+                            inline_script = (
+                                transform_params.get("script")
+                                if isinstance(transform_params, dict)
+                                else None
+                            )
+                            inline_code = (
+                                transform_params.get("code")
+                                if isinstance(transform_params, dict)
+                                else None
+                            )
+                            has_code_name = isinstance(code_name, str) and bool(code_name.strip())
+                            has_inline_code = (
+                                isinstance(inline_script, str)
+                                and bool(inline_script.strip())
+                            ) or (
+                                isinstance(inline_code, str)
+                                and bool(inline_code.strip())
+                            )
+                            if not has_code_name and not has_inline_code:
                                 errors.append(
                                     _validation_error(
                                         path=(
@@ -818,11 +849,36 @@ def create_server(
                                         ),
                                         reason="required",
                                         message=(
-                                            "transformParams.codeName is required for "
-                                            "javascript transform steps."
+                                            "Provide transformParams.codeName or inline "
+                                            "transformParams.script/code for javascript "
+                                            "transform steps."
                                         ),
                                     )
                                 )
+
+                            code_type = (
+                                transform_params.get("codeType")
+                                if isinstance(transform_params, dict)
+                                else None
+                            )
+                            if isinstance(code_type, str) and code_type.strip():
+                                normalized_code_type = code_type.strip()
+                                if normalized_code_type not in _CODE_PACKAGE_TYPE_ENUM:
+                                    errors.append(
+                                        _enum_error(
+                                            path=(
+                                                "payload.transformActions"
+                                                f"[{index}].transformParams.codeType"
+                                            ),
+                                            message=(
+                                                "transformParams.codeType must be a supported "
+                                                "FairCom code package type"
+                                            ),
+                                            allowed_values=_CODE_PACKAGE_TYPE_ENUM,
+                                            reason="invalid_enum",
+                                            received=code_type,
+                                        )
+                                    )
                         continue
 
                     output_fields = action_entry.get("outputFields")
@@ -1354,6 +1410,42 @@ def create_server(
                         normalized_action["transformService"] = action_transform_service.strip()
                     elif normalized_root_transform_service is not None:
                         normalized_action["transformService"] = normalized_root_transform_service
+
+                    transform_params = normalized_action.get("transformParams")
+                    if isinstance(transform_params, dict):
+                        normalized_transform_params = dict(transform_params)
+                        code_name = normalized_transform_params.get("codeName")
+                        if isinstance(code_name, str) and code_name.strip():
+                            normalized_transform_params["codeName"] = code_name.strip()
+
+                        code_type = normalized_transform_params.get("codeType")
+                        if isinstance(code_type, str) and code_type.strip():
+                            normalized_transform_params["codeType"] = code_type.strip()
+
+                        script_value = normalized_transform_params.get("script")
+                        if isinstance(script_value, str) and script_value.strip():
+                            normalized_transform_params["script"] = script_value.strip()
+
+                        code_value = normalized_transform_params.get("code")
+                        if isinstance(code_value, str) and code_value.strip():
+                            normalized_transform_params["code"] = code_value.strip()
+
+                        has_code_name = isinstance(
+                            normalized_transform_params.get("codeName"), str
+                        ) and bool(cast(str, normalized_transform_params.get("codeName")).strip())
+                        has_inline_code = isinstance(
+                            normalized_transform_params.get("script"), str
+                        ) and bool(cast(str, normalized_transform_params.get("script")).strip())
+                        has_inline_code = has_inline_code or (
+                            isinstance(normalized_transform_params.get("code"), str)
+                            and bool(cast(str, normalized_transform_params.get("code")).strip())
+                        )
+                        if (has_code_name or has_inline_code) and not isinstance(
+                            normalized_transform_params.get("codeType"), str
+                        ):
+                            normalized_transform_params["codeType"] = "integrationTableTransform"
+
+                        normalized_action["transformParams"] = normalized_transform_params
 
                     normalized_actions.append(normalized_action)
                 normalized_payload["transformActions"] = normalized_actions
@@ -2724,6 +2816,24 @@ def create_server(
                     "create_transform": ["payload", "confirm_write", "dry_run"],
                     "alter_transform": ["payload", "confirm_write", "dry_run"],
                     "delete_transform": ["payload", "confirm_write", "dry_run"],
+                    "list_code_packages": ["name_like", "database_name", "owner_name"],
+                    "describe_code_package": ["code_name", "database_name", "owner_name"],
+                    "register_code_package": [
+                        "code_name",
+                        "code",
+                        "code_type",
+                        "language",
+                        "service_name",
+                        "code_format",
+                        "database_name",
+                        "owner_name",
+                        "created_by",
+                        "comment",
+                        "description",
+                        "metadata",
+                        "confirm_write",
+                        "dry_run",
+                    ],
                     "describe_connector_schema": ["service_name"],
                     "validate_connector_payloads": ["action", "payload", "payloads"],
                 },
@@ -2750,6 +2860,9 @@ def create_server(
                     "create_transform": {},
                     "alter_transform": {},
                     "delete_transform": {},
+                    "list_code_packages": {},
+                    "describe_code_package": {},
+                    "register_code_package": {},
                     "describe_connector_schema": {},
                     "validate_connector_payloads": {},
                 },
@@ -2822,6 +2935,15 @@ def create_server(
                         "name": "describe_connector_schema",
                         "arguments": {"service_name": "modbus"},
                     },
+                    "register_code_package": {
+                        "name": "register_code_package",
+                        "arguments": {
+                            "code_name": "decode_mixing_tank",
+                            "code": "function transform(row){ return row; }",
+                            "code_type": "integrationTableTransform",
+                            "confirm_write": True,
+                        },
+                    },
                     "validate_connector_payloads": {
                         "name": "validate_connector_payloads",
                         "arguments": {
@@ -2852,6 +2974,7 @@ def create_server(
                     "create_input": "complete",
                     "create_output": "complete",
                     "create_transform": "requires_existing_code_package",
+                    "register_code_package": "complete",
                     "describe_connector_schema": "complete",
                     "validate_connector_payloads": "complete",
                 },
@@ -2903,8 +3026,8 @@ def create_server(
             "alterTransform",
             "deleteTransform",
         ] = "createInput",
-        payload: ConnectorPayload | None = None,
-        payloads: ConnectorPayloadBatch | None = None,
+        payload: dict[str, object] | None = None,
+        payloads: list[dict[str, object]] | None = None,
     ) -> object:
         if payload is not None and payloads is not None:
             raise _validation_failure(
@@ -2996,7 +3119,73 @@ def create_server(
                 },
             )
 
-        items: list[ConnectorPayload] = payloads if payloads is not None else [payload]  # type: ignore[list-item]
+        items: list[object] = payloads if payloads is not None else [payload]
+
+        def _sanitize_jsonish(value: object, *, depth: int = 0) -> object:
+            if depth > 8:
+                return "..."
+            if value is None or isinstance(value, (str, bool, int, float)):
+                return value
+            if isinstance(value, list):
+                return [_sanitize_jsonish(item, depth=depth + 1) for item in value]
+            if isinstance(value, dict):
+                sanitized: dict[str, object] = {}
+                for key, nested in value.items():
+                    if isinstance(key, str):
+                        sanitized[key] = _sanitize_jsonish(nested, depth=depth + 1)
+                return sanitized
+            return str(value)
+
+        def _coerce_validation_errors(raw_errors: object, *, fallback: str) -> list[dict[str, object]]:
+            if not isinstance(raw_errors, list):
+                return [
+                    {
+                        "path": "payload",
+                        "json_pointer": "/payload",
+                        "reason": "invalid_arguments",
+                        "message": fallback,
+                    }
+                ]
+
+            allowed_keys = {
+                "path",
+                "json_pointer",
+                "reason",
+                "message",
+                "expected",
+                "received",
+                "allowed_values",
+                "nearest_match",
+                "corrected_snippet",
+            }
+            sanitized_errors: list[dict[str, object]] = []
+            for item in raw_errors:
+                if not isinstance(item, dict):
+                    continue
+                normalized: dict[str, object] = {}
+                for key, value in item.items():
+                    if isinstance(key, str) and key in allowed_keys:
+                        normalized[key] = _sanitize_jsonish(value)
+                if "path" not in normalized:
+                    normalized["path"] = "payload"
+                if "json_pointer" not in normalized:
+                    normalized["json_pointer"] = "/payload"
+                if "reason" not in normalized:
+                    normalized["reason"] = "invalid_arguments"
+                if "message" not in normalized:
+                    normalized["message"] = fallback
+                sanitized_errors.append(normalized)
+
+            if sanitized_errors:
+                return sanitized_errors
+            return [
+                {
+                    "path": "payload",
+                    "json_pointer": "/payload",
+                    "reason": "invalid_arguments",
+                    "message": fallback,
+                }
+            ]
 
         def _run_preflight() -> dict[str, object]:
             results: list[dict[str, object]] = []
@@ -3034,22 +3223,17 @@ def create_server(
                     invalid_count += 1
                     received_args = exc.details.get("received_args", {})
                     validation_errors = received_args.get("validation_errors")
-                    if not isinstance(validation_errors, list) or not validation_errors:
-                        validation_errors = [
-                            {
-                                "path": "payload",
-                                "json_pointer": "/payload",
-                                "reason": "invalid_arguments",
-                                "message": str(exc.message),
-                            }
-                        ]
+                    sanitized_errors = _coerce_validation_errors(
+                        validation_errors,
+                        fallback=str(exc.message),
+                    )
 
                     results.append(
                         {
                             "index": index,
                             "status": "invalid",
                             "action": action,
-                            "errors": validation_errors,
+                            "errors": sanitized_errors,
                         }
                     )
                     continue
@@ -3089,6 +3273,427 @@ def create_server(
             }
 
         return _run_tool("validate_connector_payloads", "admin", _run_preflight)
+
+    @server.tool(name="list_code_packages")
+    def list_code_packages(
+        name_like: str | None = None,
+        database_name: str = "faircom",
+        owner_name: str = "admin",
+    ) -> object:
+        def _sql_quote_literal(value: str) -> str:
+            return "'" + value.replace("'", "''") + "'"
+
+        where_clauses = [
+            f"database_name = {_sql_quote_literal(database_name)}",
+            f"owner_name = {_sql_quote_literal(owner_name)}",
+        ]
+        if isinstance(name_like, str) and name_like.strip():
+            where_clauses.append(f"codepackage_name LIKE {_sql_quote_literal(name_like.strip())}")
+        statement = (
+            "SELECT TOP 200 id, codepackage_name, database_name, owner_name "
+            "FROM codepackage_name "
+            f"WHERE {' AND '.join(where_clauses)} "
+            "ORDER BY codepackage_name"
+        )
+        return _run_tool(
+            "list_code_packages",
+            "metadata",
+            lambda: sql_adapter.query(statement),
+        )
+
+    @server.tool(name="listCodePackages")
+    def list_code_packages_alias(
+        name_like: str | None = None,
+        database_name: str = "faircom",
+        owner_name: str = "admin",
+    ) -> object:
+        return list_code_packages(
+            name_like=name_like,
+            database_name=database_name,
+            owner_name=owner_name,
+        )
+
+    @server.tool(name="describe_code_package")
+    def describe_code_package(
+        code_name: str,
+        database_name: str = "faircom",
+        owner_name: str = "admin",
+    ) -> object:
+        normalized_code_name = code_name.strip()
+        if not normalized_code_name:
+            raise _validation_failure(
+                tool_name="describe_code_package",
+                message="code_name is required",
+                expected_args={"code_name": "string (required)"},
+                received_args={"code_name": code_name},
+                suggested_fix="Provide a non-empty code_name.",
+                example_payload={
+                    "name": "describe_code_package",
+                    "arguments": {"code_name": "decode_mixing_tank"},
+                },
+            )
+
+        def _sql_quote_literal(value: str) -> str:
+            return "'" + value.replace("'", "''") + "'"
+
+        statement = (
+            "SELECT TOP 1 n.id, n.codepackage_name, n.database_name, n.owner_name, "
+            "c.version, c.active, c.status, c.type, c.language, c.service_name, c.code_format, "
+            "c.created_by, c.updated_by, c.comment, c.description, c.metadata "
+            "FROM codepackage_name n "
+            "LEFT JOIN codepackage c ON c.codepackage_id = n.id "
+            f"WHERE n.codepackage_name = {_sql_quote_literal(normalized_code_name)} "
+            f"AND n.database_name = {_sql_quote_literal(database_name)} "
+            f"AND n.owner_name = {_sql_quote_literal(owner_name)}"
+        )
+
+        return _run_tool(
+            "describe_code_package",
+            "metadata",
+            lambda: sql_adapter.query(statement),
+        )
+
+    @server.tool(name="describeCodePackage")
+    def describe_code_package_alias(
+        code_name: str,
+        database_name: str = "faircom",
+        owner_name: str = "admin",
+    ) -> object:
+        return describe_code_package(
+            code_name=code_name,
+            database_name=database_name,
+            owner_name=owner_name,
+        )
+
+    @server.tool(name="register_code_package")
+    def register_code_package(
+        code_name: str,
+        code: str,
+        code_type: str = "integrationTableTransform",
+        *,
+        language: str = "javascript",
+        service_name: str = "v8TransformService",
+        code_format: str = "javascript",
+        database_name: str = "faircom",
+        owner_name: str = "admin",
+        created_by: str = "admin",
+        comment: str = "",
+        description: str = "",
+        metadata: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        normalized_name = code_name.strip()
+        normalized_code = code.strip()
+        normalized_type = code_type.strip()
+        if not normalized_name:
+            raise _validation_failure(
+                tool_name="register_code_package",
+                message="code_name is required",
+                expected_args={"code_name": "string (required)"},
+                received_args={"code_name": code_name},
+                suggested_fix="Provide a non-empty code_name.",
+                example_payload={
+                    "name": "register_code_package",
+                    "arguments": {
+                        "code_name": "decode_mixing_tank",
+                        "code": "function transform(row){ return row; }",
+                        "confirm_write": True,
+                    },
+                },
+            )
+        if not normalized_code:
+            raise _validation_failure(
+                tool_name="register_code_package",
+                message="code is required",
+                expected_args={"code": "string (required)"},
+                received_args={"code": code},
+                suggested_fix="Provide non-empty JavaScript code.",
+                example_payload={
+                    "name": "register_code_package",
+                    "arguments": {
+                        "code_name": "decode_mixing_tank",
+                        "code": "function transform(row){ return row; }",
+                        "confirm_write": True,
+                    },
+                },
+            )
+        if normalized_type not in _CODE_PACKAGE_TYPE_ENUM:
+            raise _validation_failure(
+                tool_name="register_code_package",
+                message="Unsupported code_type",
+                expected_args={"code_type": f"one of {_CODE_PACKAGE_TYPE_ENUM}"},
+                received_args={"code_type": code_type},
+                suggested_fix="Use one of the supported FairCom code package types.",
+                example_payload={
+                    "name": "register_code_package",
+                    "arguments": {
+                        "code_name": "decode_mixing_tank",
+                        "code": "function transform(row){ return row; }",
+                        "code_type": "integrationTableTransform",
+                        "confirm_write": True,
+                    },
+                },
+            )
+
+        def _sql_quote_literal(value: str) -> str:
+            return "'" + value.replace("'", "''") + "'"
+
+        def _extract_sql_rows(result: object) -> list[dict[str, object]]:
+            if not isinstance(result, dict):
+                return []
+            nested = result.get("result")
+            if not isinstance(nested, dict):
+                return []
+            data = nested.get("data")
+            if not isinstance(data, list):
+                return []
+            rows: list[dict[str, object]] = []
+            for entry in data:
+                if isinstance(entry, dict):
+                    rows.append(entry)
+            return rows
+
+        def _as_int(value: object) -> int | None:
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float) and value.is_integer():
+                return int(value)
+            if isinstance(value, str):
+                try:
+                    return int(value)
+                except ValueError:
+                    return None
+            return None
+
+        metadata_payload = {
+            "codeType": normalized_type,
+            "owner": owner_name,
+            "database": database_name,
+        }
+        if isinstance(metadata, dict):
+            metadata_payload.update(metadata)
+        metadata_json = json.dumps(metadata_payload, separators=(",", ":"))
+
+        select_identity_sql = (
+            "SELECT TOP 1 id FROM codepackage_name "
+            f"WHERE codepackage_name = {_sql_quote_literal(normalized_name)} "
+            f"AND database_name = {_sql_quote_literal(database_name)} "
+            f"AND owner_name = {_sql_quote_literal(owner_name)}"
+        )
+
+        if dry_run:
+            return {
+                "mode": "dry_run",
+                "status": "success",
+                "tool_name": "register_code_package",
+                "code_name": normalized_name,
+                "code_type": normalized_type,
+                "database_name": database_name,
+                "owner_name": owner_name,
+                "execution_status": "not_executed",
+                "preview": "Code package registration would execute",
+                "preview_details": {
+                    "lookup_statement": select_identity_sql,
+                    "language": language,
+                    "service_name": service_name,
+                    "code_format": code_format,
+                    "writes": [
+                        "insert codepackage_name when missing",
+                        "insert or update codepackage",
+                        "upsert codepackage_history for current version",
+                    ],
+                },
+                "warnings": [
+                    "Dry run is a local preview only and does not call FairCom backend APIs.",
+                ],
+                "hint": "Set confirm_write=True to apply code package registration.",
+            }
+
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="register_code_package",
+                message="register_code_package requires confirm_write=True",
+                expected_args={
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "code_name": normalized_name,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                },
+                suggested_fix="Set confirm_write=true to apply the change or dry_run=true to preview it.",
+                example_payload={
+                    "name": "register_code_package",
+                    "arguments": {
+                        "code_name": "decode_mixing_tank",
+                        "code": "function transform(row){ return row; }",
+                        "confirm_write": True,
+                    },
+                },
+                reason_code="missing_write_confirmation",
+            )
+
+        def _run_registration() -> dict[str, object]:
+            existing_name_rows = _extract_sql_rows(sql_adapter.query(select_identity_sql))
+            codepackage_id = _as_int(existing_name_rows[0].get("id")) if existing_name_rows else None
+            name_inserted = False
+
+            if codepackage_id is None:
+                insert_name_sql = (
+                    "INSERT INTO codepackage_name (codepackage_name, database_name, owner_name) "
+                    f"VALUES ({_sql_quote_literal(normalized_name)}, "
+                    f"{_sql_quote_literal(database_name)}, {_sql_quote_literal(owner_name)})"
+                )
+                sql_adapter.execute(insert_name_sql)
+                name_inserted = True
+                refreshed_name_rows = _extract_sql_rows(sql_adapter.query(select_identity_sql))
+                codepackage_id = (
+                    _as_int(refreshed_name_rows[0].get("id")) if refreshed_name_rows else None
+                )
+
+            if codepackage_id is None:
+                raise ValidationFailure(
+                    "Failed to resolve codepackage_id after codepackage_name registration",
+                    details={"code_name": normalized_name},
+                )
+
+            existing_body_sql = (
+                "SELECT TOP 1 codepackage_id, version FROM codepackage "
+                f"WHERE codepackage_id = {codepackage_id}"
+            )
+            existing_body_rows = _extract_sql_rows(sql_adapter.query(existing_body_sql))
+            existing_version = (
+                _as_int(existing_body_rows[0].get("version")) if existing_body_rows else None
+            )
+            next_version = 1 if existing_version is None else existing_version + 1
+
+            if existing_body_rows:
+                update_sql = (
+                    "UPDATE codepackage "
+                    f"SET version = {next_version}, "
+                    "active = 1, "
+                    "status = 'active', "
+                    f"type = {_sql_quote_literal(normalized_type)}, "
+                    f"language = {_sql_quote_literal(language)}, "
+                    f"service_name = {_sql_quote_literal(service_name)}, "
+                    f"code_format = {_sql_quote_literal(code_format)}, "
+                    f"updated_by = {_sql_quote_literal(created_by)}, "
+                    f"code = {_sql_quote_literal(normalized_code)}, "
+                    f"comment = {_sql_quote_literal(comment)}, "
+                    f"description = {_sql_quote_literal(description)}, "
+                    f"metadata = {_sql_quote_literal(metadata_json)} "
+                    f"WHERE codepackage_id = {codepackage_id}"
+                )
+                sql_adapter.execute(update_sql)
+                body_operation = "updated"
+            else:
+                insert_body_sql = (
+                    "INSERT INTO codepackage ("
+                    "codepackage_id, version, active, status, cloned_codepackage_id, "
+                    "type, language, service_name, code_format, created_by, updated_by, "
+                    "code, comment, description, metadata"
+                    ") VALUES ("
+                    f"{codepackage_id}, {next_version}, 1, 'active', NULL, "
+                    f"{_sql_quote_literal(normalized_type)}, "
+                    f"{_sql_quote_literal(language)}, "
+                    f"{_sql_quote_literal(service_name)}, "
+                    f"{_sql_quote_literal(code_format)}, "
+                    f"{_sql_quote_literal(created_by)}, "
+                    f"{_sql_quote_literal(created_by)}, "
+                    f"{_sql_quote_literal(normalized_code)}, "
+                    f"{_sql_quote_literal(comment)}, "
+                    f"{_sql_quote_literal(description)}, "
+                    f"{_sql_quote_literal(metadata_json)}"
+                    ")"
+                )
+                sql_adapter.execute(insert_body_sql)
+                body_operation = "inserted"
+
+            delete_history_sql = (
+                "DELETE FROM codepackage_history "
+                f"WHERE codepackage_id = {codepackage_id} AND version = {next_version}"
+            )
+            sql_adapter.execute(delete_history_sql)
+            insert_history_sql = (
+                "INSERT INTO codepackage_history ("
+                "codepackage_id, version, active, status, cloned_codepackage_id, "
+                "created_on, updated_on, type, language, service_name, code_format, "
+                "created_by, updated_by, code, comment, description, metadata"
+                ") "
+                "SELECT TOP 1 "
+                "codepackage_id, version, active, status, cloned_codepackage_id, "
+                "created_on, updated_on, type, language, service_name, code_format, "
+                "created_by, updated_by, code, comment, description, metadata "
+                "FROM codepackage "
+                f"WHERE codepackage_id = {codepackage_id}"
+            )
+            sql_adapter.execute(insert_history_sql)
+
+            return {
+                "result": {
+                    "code_name": normalized_name,
+                    "database_name": database_name,
+                    "owner_name": owner_name,
+                    "codepackage_id": codepackage_id,
+                    "version": next_version,
+                    "code_type": normalized_type,
+                    "name_row_inserted": name_inserted,
+                    "codepackage_operation": body_operation,
+                    "history_row_written": True,
+                },
+                "errorCode": 0,
+                "errorMessage": "",
+            }
+
+        result = _run_tool("register_code_package", "write", _run_registration)
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="registerCodePackage")
+    def register_code_package_alias(
+        code_name: str,
+        code: str,
+        code_type: str = "integrationTableTransform",
+        *,
+        language: str = "javascript",
+        service_name: str = "v8TransformService",
+        code_format: str = "javascript",
+        database_name: str = "faircom",
+        owner_name: str = "admin",
+        created_by: str = "admin",
+        comment: str = "",
+        description: str = "",
+        metadata: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        return register_code_package(
+            code_name=code_name,
+            code=code,
+            code_type=code_type,
+            language=language,
+            service_name=service_name,
+            code_format=code_format,
+            database_name=database_name,
+            owner_name=owner_name,
+            created_by=created_by,
+            comment=comment,
+            description=description,
+            metadata=metadata,
+            confirm_write=confirm_write,
+            dry_run=dry_run,
+        )
 
     @server.tool(name="runtime_status")
     def runtime_status() -> object:
@@ -3374,6 +3979,33 @@ def create_server(
                             "Create a transform connector with confirmation "
                             "guardrails and dry-run preview."
                         ),
+                    },
+                    {
+                        "name": "list_code_packages",
+                        "aliases": ["listCodePackages"],
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "List registered code package names for a database/owner.",
+                    },
+                    {
+                        "name": "describe_code_package",
+                        "aliases": ["describeCodePackage"],
+                        "group": "metadata",
+                        "risk_level": "low",
+                        "idempotent": True,
+                        "stability": "stable",
+                        "description": "Describe a registered code package and active revision metadata.",
+                    },
+                    {
+                        "name": "register_code_package",
+                        "aliases": ["registerCodePackage"],
+                        "group": "write",
+                        "risk_level": "critical",
+                        "idempotent": False,
+                        "stability": "stable",
+                        "description": "Create or update a code package and maintain codepackage history.",
                     },
                     {
                         "name": "alter_transform",

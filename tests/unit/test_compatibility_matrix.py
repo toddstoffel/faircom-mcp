@@ -563,6 +563,69 @@ def test_compatibility_matrix_transform_methods_require_output_fields_and_mappin
     )
 
 
+def test_compatibility_matrix_transform_preflight_accepts_inline_script(monkeypatch: object) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="createTransform",
+        payload={
+            "transformName": "inline_decode_asset01",
+            "serviceName": "javascript",
+            "transformActions": [
+                {
+                    "transformService": "v8TransformService",
+                    "inputFields": ["*"],
+                    "transformStepMethod": "javascript",
+                    "outputFields": ["*"],
+                    "transformParams": {
+                        "script": "function transform(row){ return row; }",
+                    },
+                }
+            ],
+        },
+    )
+
+    assert result["summary"]["all_valid"] is True
+    normalized_params = result["results"][0]["normalized_payload"]["transformActions"][0][
+        "transformParams"
+    ]
+    assert normalized_params["codeType"] == "integrationTableTransform"
+
+
+def test_compatibility_matrix_transform_preflight_rejects_unknown_code_type(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="createTransform",
+        payload={
+            "transformName": "bad_type_asset01",
+            "serviceName": "javascript",
+            "transformActions": [
+                {
+                    "transformService": "v8TransformService",
+                    "inputFields": ["*"],
+                    "transformStepMethod": "javascript",
+                    "outputFields": ["*"],
+                    "transformParams": {
+                        "codeName": "decode_mixing_tank",
+                        "codeType": "badType",
+                    },
+                }
+            ],
+        },
+    )
+
+    assert result["summary"]["all_valid"] is False
+    issues = result["results"][0]["errors"]
+    code_type_issue = next(
+        issue for issue in issues if issue["path"].endswith(".transformParams.codeType")
+    )
+    assert code_type_issue["reason"] == "invalid_enum"
+    assert "integrationTableTransform" in code_type_issue["allowed_values"]
+
+
 def test_compatibility_matrix_modbus_divisor_sets_divide_by_integer(monkeypatch: object) -> None:
     _fake_class, server_module = load_server_module(monkeypatch)
     connector_adapter = _CaptureConnectors()
