@@ -167,10 +167,7 @@ class FaircomAPIClient:
                 raise UpstreamAPIError(
                     "FairCom API returned an error",
                     details=details,
-                    retryable=(
-                        response.status_code >= 500
-                        or details.get("errorCode") == 12031
-                    ),
+                    retryable=(response.status_code >= 500 or details.get("errorCode") == 12031),
                 )
 
             try:
