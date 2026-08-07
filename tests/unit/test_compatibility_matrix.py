@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from faircom_mcp.errors import ValidationFailure
+from faircom_mcp.errors import UpstreamAPIError, ValidationFailure
 from tests.helpers.server_harness import (
     BasicFakeSQL,
     BasicFakeTables,
@@ -439,12 +439,107 @@ def test_compatibility_matrix_modbus_delete_requires_only_identity(
     result = server.tools["delete_input"](
         payload={
             "connectorName": "modbus_input",
-            "serviceName": "modbus",
         },
         confirm_write=True,
     )
 
     assert result["action"] == "deleteInput"
+
+
+def test_compatibility_matrix_delete_transform_preflight_valid_without_service_name(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="deleteTransform",
+        payload={"transformName": "normalize_energy_data"},
+    )
+
+    assert result["summary"]["all_valid"] is True
+    assert result["results"][0]["status"] == "valid"
+
+
+def test_compatibility_matrix_describe_inputs_includes_runtime_service_state(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    class _ClientWithServiceState:
+        def admin_action(
+            self,
+            action: str,
+            payload: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            _ = payload
+            if action != "listServices":
+                return {"action": action}
+            return {
+                "services": [
+                    {
+                        "serviceName": "modbus",
+                        "active": False,
+                        "status": "stopped",
+                    }
+                ]
+            }
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=_DescribeInputsWithSettings(),
+    ):
+        server = server_module.create_server(
+            _config(),
+            client_factory=lambda _config: _ClientWithServiceState(),
+        )
+
+    result = server.tools["describe_inputs"]()
+
+    assert result["inputs"][0]["serviceName"] == "modbus"
+    assert result["inputs"][0]["enabled"] is False
+    assert result["inputs"][0]["description"] == "Boiler room telemetry"
+    assert result["inputs"][0]["runtime_service_state"]["active"] is False
+    assert result["inputs"][0]["runtime_service_state"]["service_name"] == "modbus"
+
+
+def test_compatibility_matrix_alter_input_adds_recovery_for_inactive_service(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    class _AlterFailsForInactiveService:
+        def alter_input(self, payload: dict[str, object]) -> dict[str, object]:
+            raise UpstreamAPIError(
+                "Connector service inactive",
+                details={
+                    "errorCode": 12048,
+                    "errorMessage": "The requested service is not active",
+                    "payload": payload,
+                },
+            )
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=_AlterFailsForInactiveService(),
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    with pytest.raises(UpstreamAPIError) as exc:
+        server.tools["alter_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "mqtt",
+            },
+            confirm_write=True,
+        )
+
+    recovery = exc.value.details.get("recovery")
+    assert isinstance(recovery, dict)
+    assert recovery["reason_code"] == "service_inactive"
 
 
 def test_compatibility_matrix_modbus_unknown_key_is_passed_through(monkeypatch: object) -> None:
@@ -638,6 +733,35 @@ def test_compatibility_matrix_transform_methods_require_output_fields_and_mappin
     assert any(
         issue["path"].endswith(".transformParams.mapOfPropertiesToFields") for issue in issues
     )
+
+
+def test_compatibility_matrix_transform_preflight_rejects_unknown_step_method(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="createTransform",
+        payload={
+            "transformName": "bad_method_asset01",
+            "serviceName": "javascript",
+            "transformActions": [
+                {
+                    "inputFields": ["source_payload"],
+                    "transformStepMethod": "jsonTransform",
+                    "transformParams": {},
+                }
+            ],
+        },
+    )
+
+    assert result["summary"]["all_valid"] is False
+    issues = result["results"][0]["errors"]
+    step_method_issue = next(
+        issue for issue in issues if issue["path"].endswith(".transformStepMethod")
+    )
+    assert step_method_issue["reason"] == "invalid_enum"
+    assert "javascript" in step_method_issue["allowed_values"]
 
 
 def test_compatibility_matrix_transform_preflight_accepts_inline_script(

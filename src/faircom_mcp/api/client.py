@@ -333,6 +333,10 @@ class FaircomAPIClient:
         if direct_error_code == 12031:
             return True
 
+        error_message = exc.details.get("errorMessage")
+        if isinstance(error_message, str) and "12031" in error_message:
+            return True
+
         raw_body = exc.details.get("body")
         if not isinstance(raw_body, str) or not raw_body.strip():
             return False
@@ -340,13 +344,19 @@ class FaircomAPIClient:
             body_payload = json.loads(raw_body)
         except json.JSONDecodeError:
             return False
-        if not isinstance(body_payload, dict):
-            return False
-        body_error_code = FaircomAPIClient._coerce_error_code(body_payload.get("errorCode"))
-        return body_error_code == 12031
+        body_error_code = FaircomAPIClient._extract_error_code(body_payload)
+        if body_error_code == 12031:
+            return True
+        if isinstance(body_payload, dict):
+            body_message = body_payload.get("errorMessage")
+            if isinstance(body_message, str) and "12031" in body_message:
+                return True
+        return False
 
     @staticmethod
     def _coerce_error_code(value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
         if isinstance(value, int):
             return value
         if isinstance(value, str):
@@ -357,12 +367,33 @@ class FaircomAPIClient:
         return None
 
     @staticmethod
+    def _extract_error_code(payload: object, *, depth: int = 0) -> int | None:
+        if depth > 4:
+            return None
+        if isinstance(payload, dict):
+            direct = FaircomAPIClient._coerce_error_code(payload.get("errorCode"))
+            if direct is not None:
+                return direct
+            for value in payload.values():
+                nested = FaircomAPIClient._extract_error_code(value, depth=depth + 1)
+                if nested is not None:
+                    return nested
+            return None
+        if isinstance(payload, list):
+            for item in payload:
+                nested = FaircomAPIClient._extract_error_code(item, depth=depth + 1)
+                if nested is not None:
+                    return nested
+            return None
+        return FaircomAPIClient._coerce_error_code(payload)
+
+    @staticmethod
     def _raise_if_api_error(payload: Any, *, method: str, path: str) -> None:
         if not isinstance(payload, dict):
             return
 
-        error_code = payload.get("errorCode")
-        if not isinstance(error_code, int):
+        error_code = FaircomAPIClient._extract_error_code(payload)
+        if error_code is None:
             return
         if error_code == 0:
             return

@@ -402,6 +402,140 @@ def create_server(
                 return value.strip()
         return None
 
+    def _extract_service_name(value: object) -> str | None:
+        if not isinstance(value, dict):
+            return None
+        for key in ("serviceName", "name", "service", "id"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return None
+
+    def _collect_service_records(value: object) -> list[dict[str, object]]:
+        if isinstance(value, list):
+            records: list[dict[str, object]] = []
+            for item in value:
+                if isinstance(item, dict):
+                    records.append(item)
+                    records.extend(_collect_service_records(item))
+                elif isinstance(item, list):
+                    records.extend(_collect_service_records(item))
+            return records
+        if isinstance(value, dict):
+            records: list[dict[str, object]] = []
+            direct_name = _extract_service_name(value)
+            if direct_name is not None:
+                records.append(value)
+            for child_key in (
+                "services",
+                "serviceList",
+                "results",
+                "data",
+                "items",
+                "serviceInfo",
+            ):
+                child = value.get(child_key)
+                records.extend(_collect_service_records(child))
+            return records
+        return []
+
+    def _coerce_runtime_status(entry: dict[str, object]) -> tuple[bool | None, str | None]:
+        bool_keys = (
+            "active",
+            "enabled",
+            "running",
+            "started",
+            "isActive",
+            "isEnabled",
+            "isRunning",
+        )
+        for key in bool_keys:
+            raw = entry.get(key)
+            if isinstance(raw, bool):
+                return raw, key
+            if isinstance(raw, (int, float)):
+                return raw != 0, key
+            if isinstance(raw, str):
+                normalized = raw.strip().lower()
+                if normalized in {"true", "on", "yes", "running", "active", "started", "up"}:
+                    return True, key
+                if normalized in {
+                    "false",
+                    "off",
+                    "no",
+                    "stopped",
+                    "inactive",
+                    "down",
+                    "disabled",
+                }:
+                    return False, key
+
+        state_keys = ("status", "state", "runtimeStatus", "serviceStatus")
+        for key in state_keys:
+            raw = entry.get(key)
+            if not isinstance(raw, str):
+                continue
+            normalized = raw.strip().lower()
+            if normalized in {"running", "active", "started", "ready", "up", "enabled"}:
+                return True, key
+            if normalized in {
+                "stopped",
+                "inactive",
+                "down",
+                "disabled",
+                "paused",
+                "error",
+            }:
+                return False, key
+        return None, None
+
+    def _list_service_runtime_state(
+        service_names: set[str] | None = None,
+    ) -> dict[str, dict[str, object]]:
+        admin_action = getattr(client, "admin_action", None)
+        if not callable(admin_action):
+            return {}
+
+        candidate_payloads: list[dict[str, object] | None] = []
+        if service_names:
+            sorted_names = sorted(name.strip() for name in service_names if name.strip())
+            if sorted_names:
+                candidate_payloads.extend(
+                    [
+                        {"serviceNames": sorted_names},
+                        {"names": sorted_names},
+                        {"services": sorted_names},
+                    ]
+                )
+        candidate_payloads.append(None)
+
+        last_error: Exception | None = None
+        for service_payload in candidate_payloads:
+            try:
+                response = admin_action("listServices", service_payload)
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                last_error = exc
+                continue
+
+            runtime_state: dict[str, dict[str, object]] = {}
+            for record in _collect_service_records(response):
+                service_name = _extract_service_name(record)
+                if service_name is None:
+                    continue
+                active, active_source = _coerce_runtime_status(record)
+                runtime_state[service_name.lower()] = {
+                    "service_name": service_name,
+                    "active": active,
+                    "active_source": active_source,
+                    "raw": record,
+                }
+            if runtime_state:
+                return runtime_state
+
+        if last_error is not None:
+            logger.debug("listServices runtime lookup failed", exc_info=last_error)
+        return {}
+
     def _execute_connector_write(
         *,
         tool_name: str,
@@ -673,6 +807,81 @@ def create_server(
 
         payload_data = dict(payload)
 
+        if action in {"deleteInput", "deleteOutput", "deleteTransform"}:
+            if action == "deleteInput":
+                input_name = payload_data.get("inputName")
+                connector_name = payload_data.get("connectorName")
+                has_identifier = (
+                    isinstance(input_name, str)
+                    and bool(input_name.strip())
+                    or isinstance(connector_name, str)
+                    and bool(connector_name.strip())
+                )
+                if not has_identifier:
+                    return {
+                        "status": "invalid",
+                        "service_name": None,
+                        "errors": [
+                            {
+                                "path": "payload",
+                                "json_pointer": "/payload",
+                                "reason": "required",
+                                "message": "deleteInput requires inputName or connectorName",
+                            }
+                        ],
+                        "warnings": [],
+                    }
+            elif action == "deleteOutput":
+                connector_name = payload_data.get("connectorName")
+                has_identifier = isinstance(connector_name, str) and bool(connector_name.strip())
+                if not has_identifier:
+                    return {
+                        "status": "invalid",
+                        "service_name": None,
+                        "errors": [
+                            {
+                                "path": "payload",
+                                "json_pointer": "/payload",
+                                "reason": "required",
+                                "message": "deleteOutput requires connectorName",
+                            }
+                        ],
+                        "warnings": [],
+                    }
+            else:
+                transform_name = payload_data.get("transformName")
+                connector_name = payload_data.get("connectorName")
+                has_identifier = (
+                    isinstance(transform_name, str)
+                    and bool(transform_name.strip())
+                    or isinstance(connector_name, str)
+                    and bool(connector_name.strip())
+                )
+                if not has_identifier:
+                    return {
+                        "status": "invalid",
+                        "service_name": None,
+                        "errors": [
+                            {
+                                "path": "payload",
+                                "json_pointer": "/payload",
+                                "reason": "required",
+                                "message": (
+                                    "deleteTransform requires transformName "
+                                    "or connectorName"
+                                ),
+                            }
+                        ],
+                        "warnings": [],
+                    }
+
+            return {
+                "status": "validated",
+                "service_name": None,
+                "errors": [],
+                "warnings": [],
+            }
+
         service_name_raw = payload_data.get("serviceName")
         if not isinstance(service_name_raw, str) or not service_name_raw.strip():
             return {
@@ -846,82 +1055,104 @@ def create_server(
                         if isinstance(step_method_raw, str) and step_method_raw.strip()
                         else None
                     )
-                    if step_method not in {"jsonToDifferentTableFields", "jsonToTableFields"}:
-                        if step_method == "javascript":
-                            if (
-                                not isinstance(effective_transform_service, str)
-                                or effective_transform_service.strip() != "v8TransformService"
-                            ):
-                                errors.append(
-                                    _validation_error(
-                                        path=f"payload.transformActions[{index}].transformService",
-                                        reason="required",
-                                        message=(
-                                            "transformService='v8TransformService' is required "
-                                            "for javascript transform steps"
-                                        ),
-                                    )
-                                )
+                    if step_method not in {
+                        "javascript",
+                        "jsonToDifferentTableFields",
+                        "jsonToTableFields",
+                    }:
+                        errors.append(
+                            _enum_error(
+                                path=f"payload.transformActions[{index}].transformStepMethod",
+                                message=(
+                                    "transformStepMethod must be one of javascript, "
+                                    "jsonToTableFields, or jsonToDifferentTableFields"
+                                ),
+                                allowed_values=[
+                                    "javascript",
+                                    "jsonToTableFields",
+                                    "jsonToDifferentTableFields",
+                                ],
+                                reason="invalid_enum",
+                                received=step_method_raw,
+                            )
+                        )
+                        continue
 
-                            transform_params = action_entry.get("transformParams")
-                            code_name = (
-                                transform_params.get("codeName")
-                                if isinstance(transform_params, dict)
-                                else None
+                    if step_method == "javascript":
+                        if (
+                            not isinstance(effective_transform_service, str)
+                            or effective_transform_service.strip() != "v8TransformService"
+                        ):
+                            errors.append(
+                                _validation_error(
+                                    path=f"payload.transformActions[{index}].transformService",
+                                    reason="required",
+                                    message=(
+                                        "transformService='v8TransformService' is required "
+                                        "for javascript transform steps"
+                                    ),
+                                )
                             )
-                            inline_script = (
-                                transform_params.get("script")
-                                if isinstance(transform_params, dict)
-                                else None
+
+                        transform_params = action_entry.get("transformParams")
+                        code_name = (
+                            transform_params.get("codeName")
+                            if isinstance(transform_params, dict)
+                            else None
+                        )
+                        inline_script = (
+                            transform_params.get("script")
+                            if isinstance(transform_params, dict)
+                            else None
+                        )
+                        inline_code = (
+                            transform_params.get("code")
+                            if isinstance(transform_params, dict)
+                            else None
+                        )
+                        has_code_name = isinstance(code_name, str) and bool(code_name.strip())
+                        has_inline_code = (
+                            isinstance(inline_script, str) and bool(inline_script.strip())
+                        ) or (isinstance(inline_code, str) and bool(inline_code.strip()))
+                        if not has_code_name and not has_inline_code:
+                            errors.append(
+                                _validation_error(
+                                    path=(
+                                        "payload.transformActions"
+                                        f"[{index}].transformParams.codeName"
+                                    ),
+                                    reason="required",
+                                    message=(
+                                        "Provide transformParams.codeName or inline "
+                                        "transformParams.script/code for javascript "
+                                        "transform steps."
+                                    ),
+                                )
                             )
-                            inline_code = (
-                                transform_params.get("code")
-                                if isinstance(transform_params, dict)
-                                else None
-                            )
-                            has_code_name = isinstance(code_name, str) and bool(code_name.strip())
-                            has_inline_code = (
-                                isinstance(inline_script, str) and bool(inline_script.strip())
-                            ) or (isinstance(inline_code, str) and bool(inline_code.strip()))
-                            if not has_code_name and not has_inline_code:
+
+                        code_type = (
+                            transform_params.get("codeType")
+                            if isinstance(transform_params, dict)
+                            else None
+                        )
+                        if isinstance(code_type, str) and code_type.strip():
+                            normalized_code_type = code_type.strip()
+                            if normalized_code_type not in _CODE_PACKAGE_TYPE_ENUM:
                                 errors.append(
-                                    _validation_error(
+                                    _enum_error(
                                         path=(
                                             "payload.transformActions"
-                                            f"[{index}].transformParams.codeName"
+                                            f"[{index}].transformParams.codeType"
                                         ),
-                                        reason="required",
                                         message=(
-                                            "Provide transformParams.codeName or inline "
-                                            "transformParams.script/code for javascript "
-                                            "transform steps."
+                                            "transformParams.codeType must be a supported "
+                                            "FairCom code package type"
                                         ),
+                                        allowed_values=_CODE_PACKAGE_TYPE_ENUM,
+                                        reason="invalid_enum",
+                                        received=code_type,
                                     )
                                 )
-
-                            code_type = (
-                                transform_params.get("codeType")
-                                if isinstance(transform_params, dict)
-                                else None
-                            )
-                            if isinstance(code_type, str) and code_type.strip():
-                                normalized_code_type = code_type.strip()
-                                if normalized_code_type not in _CODE_PACKAGE_TYPE_ENUM:
-                                    errors.append(
-                                        _enum_error(
-                                            path=(
-                                                "payload.transformActions"
-                                                f"[{index}].transformParams.codeType"
-                                            ),
-                                            message=(
-                                                "transformParams.codeType must be a supported "
-                                                "FairCom code package type"
-                                            ),
-                                            allowed_values=_CODE_PACKAGE_TYPE_ENUM,
-                                            reason="invalid_enum",
-                                            received=code_type,
-                                        )
-                                    )
                         continue
 
                     output_fields = action_entry.get("outputFields")
@@ -1839,18 +2070,21 @@ def create_server(
     def list_inputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool("list_inputs", "metadata", lambda: connector_adapter.list_inputs(payload))
 
-    @server.tool(name="listInputs")
-    def list_inputs_alias(payload: dict[str, object] | None = None) -> object:
-        return list_inputs(payload=payload)
-
     @server.tool(name="describe_inputs")
     def describe_inputs(payload: dict[str, object] | None = None) -> object:
-        def _normalize_input_descriptions(value: object) -> object:
+        def _normalize_input_descriptions(
+            value: object,
+            *,
+            runtime_map: dict[str, dict[str, object]],
+        ) -> object:
             if isinstance(value, list):
-                return [_normalize_input_descriptions(item) for item in value]
+                return [
+                    _normalize_input_descriptions(item, runtime_map=runtime_map) for item in value
+                ]
             if isinstance(value, dict):
                 normalized = {
-                    key: _normalize_input_descriptions(nested) for key, nested in value.items()
+                    key: _normalize_input_descriptions(nested, runtime_map=runtime_map)
+                    for key, nested in value.items()
                 }
                 for container_name in (
                     "settings",
@@ -1868,18 +2102,128 @@ def create_server(
                     if "description" not in normalized and "description" in container:
                         normalized["description"] = container.get("description")
                     container.pop("description", None)
+
+                service_name = normalized.get("serviceName")
+                if isinstance(service_name, str) and service_name.strip():
+                    runtime_entry = runtime_map.get(service_name.strip().lower())
+                    if runtime_entry is not None:
+                        normalized.setdefault("runtime_service_state", runtime_entry)
                 return normalized
             return value
+
+        def _collect_service_names(value: object, names: set[str]) -> None:
+            if isinstance(value, list):
+                for item in value:
+                    _collect_service_names(item, names)
+                return
+            if not isinstance(value, dict):
+                return
+            for key, nested in value.items():
+                if key == "serviceName" and isinstance(nested, str) and nested.strip():
+                    names.add(nested.strip())
+                else:
+                    _collect_service_names(nested, names)
+
+        def _describe_with_runtime() -> object:
+            described = connector_adapter.describe_inputs(payload)
+            service_names: set[str] = set()
+            _collect_service_names(described, service_names)
+            runtime_map = _list_service_runtime_state(service_names)
+            return _normalize_input_descriptions(described, runtime_map=runtime_map)
 
         return _run_tool(
             "describe_inputs",
             "metadata",
-            lambda: _normalize_input_descriptions(connector_adapter.describe_inputs(payload)),
+            _describe_with_runtime,
         )
 
-    @server.tool(name="describeInputs")
-    def describe_inputs_alias(payload: dict[str, object] | None = None) -> object:
-        return describe_inputs(payload=payload)
+    @server.tool(name="list_services")
+    def list_services(payload: dict[str, object] | None = None) -> object:
+        return _run_tool(
+            "list_services",
+            "admin",
+            lambda: client.admin_action("listServices", payload),
+        )
+
+    @server.tool(name="manage_service")
+    def manage_service(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        if dry_run:
+            return {
+                "mode": "dry_run",
+                "status": "success",
+                "tool_name": "manage_service",
+                "action": "manageService",
+                "payload": payload,
+                "execution_status": "not_executed",
+                "preview": "Service management change preview only",
+                "warnings": [
+                    "Dry run is a local preview only and does not call FairCom backend APIs.",
+                    "Use confirm_write=true to execute manageService upstream.",
+                ],
+            }
+
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="manage_service",
+                message="manage_service requires confirm_write=True",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={
+                    "payload": payload,
+                    "confirm_write": confirm_write,
+                    "dry_run": dry_run,
+                    "confirm_write_required": True,
+                },
+                suggested_fix="Set confirm_write=true to apply the service change.",
+                example_payload={
+                    "name": "manage_service",
+                    "arguments": {
+                        "payload": {"serviceName": "modbus", "enabled": True},
+                        "confirm_write": True,
+                    },
+                },
+                reason_code="missing_write_confirmation",
+            )
+
+        if not isinstance(payload, dict) or not payload:
+            raise _validation_failure(
+                tool_name="manage_service",
+                message="payload is required",
+                expected_args={"payload": "object (required)"},
+                received_args={"payload": payload},
+                suggested_fix="Provide the manageService payload from FairCom API docs.",
+                example_payload={
+                    "name": "manage_service",
+                    "arguments": {
+                        "payload": {"serviceName": "modbus", "enabled": True},
+                        "confirm_write": True,
+                    },
+                },
+            )
+
+        result = _run_tool(
+            "manage_service",
+            "admin",
+            lambda: client.admin_action("manageService", payload),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
 
     @server.tool(name="create_input")
     def create_input(
@@ -1958,14 +2302,6 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="createInput")
-    def create_input_alias(
-        payload: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return create_input(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
-
     @server.tool(name="alter_input")
     def alter_input(
         payload: dict[str, object] | None = None,
@@ -2021,16 +2357,60 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _execute_connector_write(
-            tool_name="alter_input",
-            action="alterInput",
-            target=_connector_target_name(resolved_payload),
-            writer=lambda: _run_tool(
-                "alter_input",
-                "connector",
-                lambda: connector_adapter.alter_input(resolved_payload),
-            ),
-        )
+        try:
+            result = _execute_connector_write(
+                tool_name="alter_input",
+                action="alterInput",
+                target=_connector_target_name(resolved_payload),
+                writer=lambda: _run_tool(
+                    "alter_input",
+                    "connector",
+                    lambda: connector_adapter.alter_input(resolved_payload),
+                ),
+            )
+        except FaircomError as exc:
+            details = exc.details if isinstance(exc.details, dict) else {}
+            error_code = details.get("errorCode")
+            error_message = details.get("errorMessage")
+            normalized_error_code = str(error_code).strip() if error_code is not None else ""
+            message_text = error_message.lower() if isinstance(error_message, str) else ""
+            looks_like_inactive_service = normalized_error_code == "12048" or (
+                "service" in message_text and "active" in message_text
+            )
+            if looks_like_inactive_service:
+                guidance = {
+                    "reason_code": "service_inactive",
+                    "message": (
+                        "The target input service appears inactive. Use list_services to inspect "
+                        "runtime state, then manage_service with "
+                        "confirm_write=true to enable/start "
+                        "the service before retrying alter_input."
+                    ),
+                    "service_name": resolved_payload.get("serviceName"),
+                    "list_services_example": {
+                        "name": "list_services",
+                        "arguments": {
+                            "payload": {
+                                "serviceNames": [resolved_payload.get("serviceName")],
+                            }
+                        },
+                    },
+                    "manage_service_example": {
+                        "name": "manage_service",
+                        "arguments": {
+                            "payload": {
+                                "serviceName": resolved_payload.get("serviceName"),
+                                "enabled": True,
+                            },
+                            "confirm_write": True,
+                        },
+                    },
+                }
+                if isinstance(exc.details, dict):
+                    exc.details.setdefault("recovery", guidance)
+                else:
+                    exc.details = {"recovery": guidance}
+            raise
         if isinstance(result, dict):
             enriched = dict(result)
             enriched.update(
@@ -2042,14 +2422,6 @@ def create_server(
             )
             return enriched
         return result
-
-    @server.tool(name="alterInput")
-    def alter_input_alias(
-        payload: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return alter_input(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
 
     @server.tool(name="delete_input")
     def delete_input(
@@ -2128,14 +2500,6 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="deleteInput")
-    def delete_input_alias(
-        payload: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return delete_input(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
-
     @server.tool(name="list_outputs")
     def list_outputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
@@ -2144,10 +2508,6 @@ def create_server(
             lambda: connector_adapter.list_outputs(payload),
         )
 
-    @server.tool(name="listOutputs")
-    def list_outputs_alias(payload: dict[str, object] | None = None) -> object:
-        return list_outputs(payload=payload)
-
     @server.tool(name="describe_outputs")
     def describe_outputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
@@ -2155,10 +2515,6 @@ def create_server(
             "metadata",
             lambda: connector_adapter.describe_outputs(payload),
         )
-
-    @server.tool(name="describeOutputs")
-    def describe_outputs_alias(payload: dict[str, object] | None = None) -> object:
-        return describe_outputs(payload=payload)
 
     @server.tool(name="create_output")
     def create_output(
@@ -2237,14 +2593,6 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="createOutput")
-    def create_output_alias(
-        payload: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return create_output(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
-
     @server.tool(name="alter_output")
     def alter_output(
         payload: dict[str, object] | None = None,
@@ -2321,14 +2669,6 @@ def create_server(
             )
             return enriched
         return result
-
-    @server.tool(name="alterOutput")
-    def alter_output_alias(
-        payload: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return alter_output(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
 
     @server.tool(name="delete_output")
     def delete_output(
@@ -2407,14 +2747,6 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="deleteOutput")
-    def delete_output_alias(
-        payload: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return delete_output(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
-
     @server.tool(name="list_transforms")
     def list_transforms(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
@@ -2423,10 +2755,6 @@ def create_server(
             lambda: connector_adapter.list_transforms(payload),
         )
 
-    @server.tool(name="listTransforms")
-    def list_transforms_alias(payload: dict[str, object] | None = None) -> object:
-        return list_transforms(payload=payload)
-
     @server.tool(name="describe_transforms")
     def describe_transforms(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
@@ -2434,10 +2762,6 @@ def create_server(
             "metadata",
             lambda: connector_adapter.describe_transforms(payload),
         )
-
-    @server.tool(name="describeTransforms")
-    def describe_transforms_alias(payload: dict[str, object] | None = None) -> object:
-        return describe_transforms(payload=payload)
 
     @server.tool(name="create_transform")
     def create_transform(
@@ -2516,14 +2840,6 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="createTransform")
-    def create_transform_alias(
-        payload: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return create_transform(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
-
     @server.tool(name="alter_transform")
     def alter_transform(
         payload: dict[str, object] | None = None,
@@ -2601,14 +2917,6 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="alterTransform")
-    def alter_transform_alias(
-        payload: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return alter_transform(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
-
     @server.tool(name="delete_transform")
     def delete_transform(
         payload: dict[str, object] | None = None,
@@ -2685,14 +2993,6 @@ def create_server(
             )
             return enriched
         return result
-
-    @server.tool(name="deleteTransform")
-    def delete_transform_alias(
-        payload: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return delete_transform(payload=payload, confirm_write=confirm_write, dry_run=dry_run)
 
     @server.tool(name="sql_query")
     def sql_query(
@@ -3409,18 +3709,6 @@ def create_server(
             lambda: sql_adapter.query(statement),
         )
 
-    @server.tool(name="listCodePackages")
-    def list_code_packages_alias(
-        name_like: str | None = None,
-        database_name: str = "faircom",
-        owner_name: str = "admin",
-    ) -> object:
-        return list_code_packages(
-            name_like=name_like,
-            database_name=database_name,
-            owner_name=owner_name,
-        )
-
     @server.tool(name="describe_code_package")
     def describe_code_package(
         code_name: str,
@@ -3459,18 +3747,6 @@ def create_server(
             "describe_code_package",
             "metadata",
             lambda: sql_adapter.query(statement),
-        )
-
-    @server.tool(name="describeCodePackage")
-    def describe_code_package_alias(
-        code_name: str,
-        database_name: str = "faircom",
-        owner_name: str = "admin",
-    ) -> object:
-        return describe_code_package(
-            code_name=code_name,
-            database_name=database_name,
-            owner_name=owner_name,
         )
 
     @server.tool(name="register_code_package")
@@ -3874,41 +4150,6 @@ def create_server(
             )
             return enriched
         return result
-
-    @server.tool(name="registerCodePackage")
-    def register_code_package_alias(
-        code_name: str,
-        code: str,
-        code_type: str = "integrationTableTransform",
-        *,
-        language: str = "javascript",
-        service_name: str = "v8TransformService",
-        code_format: str = "javascript",
-        database_name: str = "faircom",
-        owner_name: str = "admin",
-        created_by: str = "admin",
-        comment: str = "",
-        description: str = "",
-        metadata: dict[str, object] | None = None,
-        confirm_write: bool = False,
-        dry_run: bool = False,
-    ) -> object:
-        return register_code_package(
-            code_name=code_name,
-            code=code,
-            code_type=code_type,
-            language=language,
-            service_name=service_name,
-            code_format=code_format,
-            database_name=database_name,
-            owner_name=owner_name,
-            created_by=created_by,
-            comment=comment,
-            description=description,
-            metadata=metadata,
-            confirm_write=confirm_write,
-            dry_run=dry_run,
-        )
 
     @server.tool(name="runtime_status")
     def runtime_status() -> object:

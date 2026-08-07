@@ -22,6 +22,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     sql_query_page_calls: list[tuple[str, list[object] | None, int, int]] = []
     sql_execute_calls: list[tuple[str, list[object] | None]] = []
     connector_calls: list[tuple[str, dict[str, object] | None]] = []
+    admin_calls: list[tuple[str, dict[str, object] | None]] = []
 
     class FakeTables:
         def list_tables(
@@ -158,7 +159,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             return {"action": "deleteTransform", "payload": payload}
 
     class FakeClient:
-        pass
+        def admin_action(
+            self,
+            action: str,
+            payload: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            admin_calls.append((action, payload))
+            return {"action": action, "payload": payload}
 
     def client_factory(received: AppConfig) -> object:
         captured.append(received)
@@ -192,46 +199,30 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "list_table_columns",
         "list_table_indexes",
         "list_inputs",
-        "listInputs",
         "describe_inputs",
-        "describeInputs",
+        "list_services",
+        "manage_service",
         "create_input",
-        "createInput",
         "alter_input",
-        "alterInput",
         "delete_input",
-        "deleteInput",
         "list_outputs",
-        "listOutputs",
         "describe_outputs",
-        "describeOutputs",
         "create_output",
-        "createOutput",
         "alter_output",
-        "alterOutput",
         "delete_output",
-        "deleteOutput",
         "list_transforms",
-        "listTransforms",
         "describe_transforms",
-        "describeTransforms",
         "create_transform",
-        "createTransform",
         "alter_transform",
-        "alterTransform",
         "delete_transform",
-        "deleteTransform",
         "sql_query",
         "sql_query_page",
         "get_usage_contract",
         "describe_connector_schema",
         "validate_connector_payloads",
         "list_code_packages",
-        "listCodePackages",
         "describe_code_package",
-        "describeCodePackage",
         "register_code_package",
-        "registerCodePackage",
         "runtime_status",
         "capabilities_summary",
         "observability_metrics",
@@ -306,13 +297,19 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "action": "describeInputs",
         "payload": {"connectorNames": ["modbus_1"]},
     }
-    assert server.tools["listInputs"](payload={"connectorNameLike": "modbus%"}) == {
-        "action": "listInputs",
-        "payload": {"connectorNameLike": "modbus%"},
+    assert server.tools["list_services"](payload={"serviceNames": ["modbus"]}) == {
+        "action": "listServices",
+        "payload": {"serviceNames": ["modbus"]},
     }
-    assert server.tools["describeInputs"](payload={"connectorNames": ["modbus_1"]}) == {
-        "action": "describeInputs",
-        "payload": {"connectorNames": ["modbus_1"]},
+    assert server.tools["manage_service"](
+        payload={"serviceName": "modbus", "enabled": True},
+        confirm_write=True,
+    ) == {
+        "action": "manageService",
+        "payload": {"serviceName": "modbus", "enabled": True},
+        "dry_run_applied": False,
+        "confirm_write_required": True,
+        "mutation_applied": True,
     }
     assert server.tools["create_input"](
         payload={"connectorName": "modbus_1"},
@@ -324,29 +321,11 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "confirm_write_required": True,
         "mutation_applied": True,
     }
-    assert server.tools["createInput"](
-        payload={"connectorName": "modbus_2"},
-        confirm_write=True,
-    ) == {
-        "action": "createInput",
-        "payload": {"connectorName": "modbus_2", "inputName": "modbus_2"},
-        "dry_run_applied": False,
-        "confirm_write_required": True,
-        "mutation_applied": True,
-    }
     assert server.tools["list_outputs"](payload={"connectorNameLike": "mqtt%"}) == {
         "action": "listOutputs",
         "payload": {"connectorNameLike": "mqtt%"},
     }
     assert server.tools["describe_outputs"](payload={"connectorNames": ["mqtt_1"]}) == {
-        "action": "describeOutputs",
-        "payload": {"connectorNames": ["mqtt_1"]},
-    }
-    assert server.tools["listOutputs"](payload={"connectorNameLike": "mqtt%"}) == {
-        "action": "listOutputs",
-        "payload": {"connectorNameLike": "mqtt%"},
-    }
-    assert server.tools["describeOutputs"](payload={"connectorNames": ["mqtt_1"]}) == {
         "action": "describeOutputs",
         "payload": {"connectorNames": ["mqtt_1"]},
     }
@@ -367,41 +346,6 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "action": "createOutput",
             "target": {"connectorName": "mqtt_1"},
             "forwarded_payload": {"connectorName": "mqtt_1"},
-            "row_estimate": "unknown",
-            "upstream_validated": False,
-            "schema_validated": False,
-            "schema_status": "unvalidated",
-            "schema_service": None,
-        },
-        "warnings": [
-            "Dry run is a local preview only and does not call FairCom backend APIs.",
-            (
-                "Dry run did not run full schema validation because no local schema profile "
-                "matched this payload."
-            ),
-        ],
-        "hint": (
-            "Review the preview above. Then run list_inputs/describe_inputs to verify upstream "
-            "connectivity before calling with confirm_write=True."
-        ),
-    }
-    assert server.tools["createOutput"](
-        payload={"connectorName": "mqtt_2"},
-        dry_run=True,
-    ) == {
-        "mode": "dry_run",
-        "status": "success",
-        "tool_name": "create_output",
-        "action": "createOutput",
-        "payload": {"connectorName": "mqtt_2"},
-        "forwarded_payload": {"connectorName": "mqtt_2"},
-        "schema_outcome": "unvalidated",
-        "execution_status": "not_executed",
-        "preview": "Connector change preview only",
-        "preview_details": {
-            "action": "createOutput",
-            "target": {"connectorName": "mqtt_2"},
-            "forwarded_payload": {"connectorName": "mqtt_2"},
             "row_estimate": "unknown",
             "upstream_validated": False,
             "schema_validated": False,
@@ -472,6 +416,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     register_code_package_dry_run = server.tools["register_code_package"](
         code_name="decode_mixing_tank",
         code="function transform(row){ return row; }",
+        language="sql",
         dry_run=True,
     )
     assert register_code_package_dry_run["status"] == "success"
@@ -578,6 +523,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     )
     assert preflight["mode"] == "preflight"
     assert preflight["summary"]["all_valid"] is True
+    delete_preflight = server.tools["validate_connector_payloads"](
+        action="deleteTransform",
+        payload={"transformName": "normalize_energy_data"},
+    )
+    assert delete_preflight["mode"] == "preflight"
+    assert delete_preflight["summary"]["all_valid"] is True
+    assert delete_preflight["results"][0]["status"] == "valid"
     assert server.tools["runtime_status"]() == {
         "service": "faircom-mcp",
         "tool_group_allowlist": ["metadata", "query", "write", "connector", "admin", "diagnostics"],
@@ -635,8 +587,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     audit_payload = server.tools["observability_audit"]()
     assert audit_payload["service"] == "faircom-mcp"
     event_types = [event["type"] for event in audit_payload["events"]]
-    assert event_types.count("connector_write_attempt") == 5
-    assert event_types.count("connector_write_result") == 3
+    assert event_types.count("connector_write_attempt") == 3
+    assert event_types.count("connector_write_result") == 2
     assert event_types.count("code_package_write_attempt") == 1
     assert event_types.count("code_package_write_result") == 1
     assert all("timestamp" in event for event in audit_payload["events"])
@@ -706,12 +658,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert connector_calls == [
         ("listInputs", {"connectorNameLike": "modbus%"}),
         ("describeInputs", {"connectorNames": ["modbus_1"]}),
-        ("listInputs", {"connectorNameLike": "modbus%"}),
-        ("describeInputs", {"connectorNames": ["modbus_1"]}),
         ("createInput", {"connectorName": "modbus_1", "inputName": "modbus_1"}),
-        ("createInput", {"connectorName": "modbus_2", "inputName": "modbus_2"}),
-        ("listOutputs", {"connectorNameLike": "mqtt%"}),
-        ("describeOutputs", {"connectorNames": ["mqtt_1"]}),
         ("listOutputs", {"connectorNameLike": "mqtt%"}),
         ("describeOutputs", {"connectorNames": ["mqtt_1"]}),
         (
