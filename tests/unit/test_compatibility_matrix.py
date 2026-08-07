@@ -559,8 +559,7 @@ def test_compatibility_matrix_transform_methods_require_output_fields_and_mappin
     issues = result["results"][0]["errors"]
     assert any(issue["path"].endswith(".outputFields") for issue in issues)
     assert any(
-        issue["path"].endswith(".transformParams.mapOfPropertiesToFields")
-        for issue in issues
+        issue["path"].endswith(".transformParams.mapOfPropertiesToFields") for issue in issues
     )
 
 
@@ -697,10 +696,7 @@ def test_compatibility_matrix_transform_service_moved_to_action_scope(
 
     _action, forwarded_payload = connector_adapter.calls[-1]
     assert "transformService" not in forwarded_payload
-    assert (
-        forwarded_payload["transformActions"][0]["transformService"]
-        == "v8TransformService"
-    )
+    assert forwarded_payload["transformActions"][0]["transformService"] == "v8TransformService"
 
 
 def test_compatibility_matrix_tool_results_strip_auth_token(monkeypatch: object) -> None:

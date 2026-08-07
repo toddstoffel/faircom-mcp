@@ -222,7 +222,7 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
                     "modbusDataAccess": "holdingregister",
                     "modbusDataType": "float32ABCD",
                     "modbusDataLen": 4,
-                }
+                },
             ],
         },
     },
@@ -760,21 +760,18 @@ def create_server(
 
                     action_transform_service = action_entry.get("transformService")
                     effective_transform_service = action_transform_service
-                    has_action_transform_service = (
-                        isinstance(effective_transform_service, str)
-                        and bool(effective_transform_service.strip())
-                    )
+                    has_action_transform_service = isinstance(
+                        effective_transform_service, str
+                    ) and bool(effective_transform_service.strip())
                     if not has_action_transform_service:
                         effective_transform_service = root_transform_service
 
-                    has_root_transform_service = (
-                        isinstance(root_transform_service, str)
-                        and bool(root_transform_service.strip())
+                    has_root_transform_service = isinstance(root_transform_service, str) and bool(
+                        root_transform_service.strip()
                     )
-                    has_action_transform_service = (
-                        isinstance(action_transform_service, str)
-                        and bool(action_transform_service.strip())
-                    )
+                    has_action_transform_service = isinstance(
+                        action_transform_service, str
+                    ) and bool(action_transform_service.strip())
                     if has_root_transform_service and not has_action_transform_service:
                         warnings.append(
                             "payload.transformService is deprecated for javascript transforms; "

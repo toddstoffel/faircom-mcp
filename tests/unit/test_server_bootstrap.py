@@ -500,8 +500,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert usage_contract["example_validity"]["create_input"] == "complete"
     assert usage_contract["example_validity"]["create_output"] == "complete"
     assert (
-        usage_contract["example_validity"]["create_transform"]
-        == "requires_existing_code_package"
+        usage_contract["example_validity"]["create_transform"] == "requires_existing_code_package"
     )
     assert "modbus" in usage_contract["connector_payload_profiles"]
     assert "mqtt" in usage_contract["connector_payload_profiles"]
