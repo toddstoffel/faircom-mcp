@@ -58,8 +58,8 @@ COPY src ./src
 COPY devtools ./devtools
 COPY packaging ./packaging
 
-# Rocky ships Python 3.9; pass version explicitly to avoid tomllib parsing path.
-RUN APP_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n1)" \
+# Project version is dynamic in pyproject; read the package version constant directly.
+RUN APP_VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/faircom_mcp/_version.py | head -n1)" \
     && test -n "$APP_VERSION" \
     && PACKAGE_BUILD_MODE=native bash devtools/build_linux_packages.sh "$APP_VERSION"
 
