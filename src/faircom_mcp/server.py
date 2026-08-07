@@ -990,16 +990,17 @@ def create_server(
                     convert_to_float = entry.get("modbusConvertToFloat")
                     if isinstance(divisor, float) and divisor.is_integer():
                         divisor = int(divisor)
-                    if isinstance(divisor, int) and divisor > 1:
-                        if not isinstance(convert_to_float, str) or not convert_to_float.strip():
-                            warnings.append(
-                                (
-                                    "payload.propertyMapList"
-                                    f"[{index}].modbusDivisor was provided without "
-                                    "modbusConvertToFloat; MCP will normalize this to "
-                                    "divideByInteger on write requests."
-                                )
-                            )
+                    if (
+                        isinstance(divisor, int)
+                        and divisor > 1
+                        and (not isinstance(convert_to_float, str) or not convert_to_float.strip())
+                    ):
+                        warnings.append(
+                            "payload.propertyMapList"
+                            f"[{index}].modbusDivisor was provided without "
+                            "modbusConvertToFloat; MCP will normalize this to "
+                            "divideByInteger on write requests."
+                        )
 
         status = "validated" if not errors else "invalid"
         return {
