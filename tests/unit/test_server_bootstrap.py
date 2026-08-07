@@ -424,7 +424,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
                     "inputFields": ["*"],
                     "transformStepMethod": "javascript",
                     "outputFields": ["*"],
-                    "transformParams": {"script": "return payload;"},
+                    "transformParams": {"codeName": "decode_mixing_tank"},
                 }
             ],
         },
@@ -435,13 +435,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "transformName": "normalize_energy_data",
             "connectorName": "normalize_energy_data",
             "serviceName": "javascript",
-            "transformService": "v8TransformService",
             "transformActions": [
                 {
+                    "transformService": "v8TransformService",
                     "inputFields": ["*"],
                     "transformStepMethod": "javascript",
                     "outputFields": ["*"],
-                    "transformParams": {"script": "return payload;"},
+                    "transformParams": {"codeName": "decode_mixing_tank"},
                 }
             ],
         },
@@ -495,9 +495,14 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "arguments"
     ]["payload"]
     assert create_input_example["inputName"] == "modbus_energy_input"
+    assert create_input_example["tableName"] == "modbus_energy_raw"
     assert create_output_example["serviceName"] == "mqtt"
     assert usage_contract["example_validity"]["create_input"] == "complete"
     assert usage_contract["example_validity"]["create_output"] == "complete"
+    assert (
+        usage_contract["example_validity"]["create_transform"]
+        == "requires_existing_code_package"
+    )
     assert "modbus" in usage_contract["connector_payload_profiles"]
     assert "mqtt" in usage_contract["connector_payload_profiles"]
     assert "javascript" in usage_contract["connector_payload_profiles"]
@@ -515,6 +520,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         payload={
             "connectorName": "modbus_energy_input",
             "serviceName": "modbus",
+            "tableName": "modbus_energy_raw",
             "modbusProtocol": "TCP",
             "modbusServer": "127.0.0.1",
             "modbusServerPort": 502,
@@ -574,13 +580,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert metrics_payload["compatibility_events"]["sql_query:alias_normalized"] >= 1
     audit_payload = server.tools["observability_audit"]()
     assert audit_payload["service"] == "faircom-mcp"
-    assert [event["type"] for event in audit_payload["events"]] == [
-        "connector_write_attempt",
-        "connector_write_attempt",
-        "connector_write_attempt",
-        "connector_write_attempt",
-        "connector_write_attempt",
-    ]
+    event_types = [event["type"] for event in audit_payload["events"]]
+    assert event_types.count("connector_write_attempt") == 5
+    assert event_types.count("connector_write_result") == 3
+    assert all("timestamp" in event for event in audit_payload["events"])
     assert {event["details"]["tool"] for event in audit_payload["events"]} == {
         "create_input",
         "create_output",
@@ -660,13 +663,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
                 "transformName": "normalize_energy_data",
                 "connectorName": "normalize_energy_data",
                 "serviceName": "javascript",
-                "transformService": "v8TransformService",
                 "transformActions": [
                     {
+                        "transformService": "v8TransformService",
                         "inputFields": ["*"],
                         "transformStepMethod": "javascript",
                         "outputFields": ["*"],
-                        "transformParams": {"script": "return payload;"},
+                        "transformParams": {"codeName": "decode_mixing_tank"},
                     }
                 ],
             },

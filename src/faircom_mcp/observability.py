@@ -4,6 +4,7 @@ import threading
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -86,6 +87,7 @@ class AuditLog:
             self._events.append(
                 {
                     "type": event_type,
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "details": details or {},
                 }
             )

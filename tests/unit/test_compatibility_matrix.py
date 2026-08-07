@@ -121,6 +121,7 @@ def test_compatibility_matrix_modbus_schema_validation_on_write(monkeypatch: obj
             payload={
                 "connectorName": "modbus_input",
                 "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
                 "modbusProtocol": "TCP",
                 "modbusServer": "127.0.0.1",
                 "modbusServerPort": 502,
@@ -135,6 +136,34 @@ def test_compatibility_matrix_modbus_schema_validation_on_write(monkeypatch: obj
     )
 
 
+def test_compatibility_matrix_modbus_requires_table_name(monkeypatch: object) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "modbus",
+                "modbusProtocol": "TCP",
+                "modbusServer": "127.0.0.1",
+                "modbusServerPort": 502,
+                "propertyMapList": [
+                    {
+                        "propertyName": "temperature",
+                        "modbusDataAccess": "holdingregister",
+                        "modbusDataAddress": 1199,
+                    }
+                ],
+            },
+            confirm_write=True,
+        )
+
+    assert any(
+        issue["path"] == "payload.tableName"
+        for issue in exc.value.details["received_args"]["validation_errors"]
+    )
+
+
 def test_compatibility_matrix_modbus_dry_run_invalid_preview(monkeypatch: object) -> None:
     server = _make_server(monkeypatch)
 
@@ -142,6 +171,7 @@ def test_compatibility_matrix_modbus_dry_run_invalid_preview(monkeypatch: object
         payload={
             "connectorName": "modbus_input",
             "serviceName": "modbus",
+            "tableName": "modbus_energy_raw",
             "modbusProtocol": "TCP",
             "modbusServer": "127.0.0.1",
             "modbusServerPort": 502,
@@ -177,6 +207,7 @@ def test_compatibility_matrix_preserves_modbus_mapping_fields_on_write(
         payload={
             "connectorName": "modbus_input",
             "serviceName": "modbus",
+            "tableName": "modbus_energy_raw",
             "modbusProtocol": "TCP",
             "modbusServer": "127.0.0.1",
             "modbusServerPort": 502,
@@ -222,6 +253,7 @@ def test_compatibility_matrix_modbus_requires_address_and_property_target(
             payload={
                 "connectorName": "modbus_input",
                 "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
                 "modbusProtocol": "TCP",
                 "modbusServer": "127.0.0.1",
                 "modbusServerPort": 502,
@@ -251,6 +283,7 @@ def test_compatibility_matrix_enum_required_includes_allowed_values(
             payload={
                 "connectorName": "modbus_input",
                 "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
                 "modbusProtocol": "TCP",
                 "modbusServer": "127.0.0.1",
                 "modbusServerPort": 502,
@@ -283,6 +316,7 @@ def test_compatibility_matrix_enum_invalid_includes_allowed_values_and_nearest_m
             payload={
                 "connectorName": "modbus_input",
                 "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
                 "modbusProtocol": "TCP",
                 "modbusServer": "127.0.0.1",
                 "modbusServerPort": 502,
@@ -343,6 +377,7 @@ def test_compatibility_matrix_modbus_unknown_key_is_passed_through(monkeypatch: 
         payload={
             "connectorName": "modbus_input",
             "serviceName": "modbus",
+            "tableName": "modbus_energy_raw",
             "modbusProtocol": "TCP",
             "modbusServer": "127.0.0.1",
             "modbusServerPort": 502,
@@ -373,6 +408,7 @@ def test_compatibility_matrix_validation_errors_include_corrected_snippet(
             payload={
                 "connectorName": "modbus_input",
                 "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
                 "modbusProtocol": "TCP",
                 "modbusServer": "127.0.0.1",
                 "modbusServerPort": 502,
@@ -388,6 +424,7 @@ def test_compatibility_matrix_validation_errors_include_corrected_snippet(
 
     assert property_map_issue["corrected_snippet"] == {
         "serviceName": "modbus",
+        "tableName": "modbus_energy_raw",
         "modbusProtocol": "TCP",
         "modbusServer": "127.0.0.1",
         "modbusServerPort": 502,
@@ -421,6 +458,7 @@ def test_compatibility_matrix_connector_preflight_single_valid(monkeypatch: obje
         payload={
             "connectorName": "modbus_input",
             "serviceName": "modbus",
+            "tableName": "modbus_energy_raw",
             "modbusProtocol": "TCP",
             "modbusServer": "127.0.0.1",
             "modbusServerPort": 502,
@@ -450,6 +488,7 @@ def test_compatibility_matrix_connector_preflight_batch_mixed(monkeypatch: objec
             {
                 "connectorName": "modbus_valid",
                 "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
                 "modbusProtocol": "TCP",
                 "modbusServer": "127.0.0.1",
                 "modbusServerPort": 502,
@@ -464,6 +503,7 @@ def test_compatibility_matrix_connector_preflight_batch_mixed(monkeypatch: objec
             {
                 "connectorName": "modbus_invalid",
                 "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
                 "modbusProtocol": "TCP",
                 "modbusServer": "127.0.0.1",
                 "modbusServerPort": 502,
@@ -540,6 +580,7 @@ def test_compatibility_matrix_modbus_divisor_sets_divide_by_integer(monkeypatch:
         payload={
             "connectorName": "modbus_input",
             "serviceName": "modbus",
+            "tableName": "modbus_energy_raw",
             "modbusProtocol": "TCP",
             "modbusServer": "127.0.0.1",
             "modbusServerPort": 502,
@@ -612,3 +653,120 @@ def test_compatibility_matrix_transform_action_name_alias_normalized(monkeypatch
     _action, forwarded_payload = connector_adapter.calls[-1]
     step_method = forwarded_payload["transformActions"][0]["transformStepMethod"]
     assert step_method == "jsonToTableFields"
+
+
+def test_compatibility_matrix_transform_service_moved_to_action_scope(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    class _CaptureTransformConnector:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def create_transform(self, payload: dict[str, object]) -> dict[str, object]:
+            self.calls.append(("createTransform", payload))
+            return {"action": "createTransform", "payload": payload}
+
+    connector_adapter = _CaptureTransformConnector()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    server.tools["create_transform"](
+        payload={
+            "transformName": "decode_asset01",
+            "serviceName": "javascript",
+            "transformService": "v8TransformService",
+            "transformActions": [
+                {
+                    "inputFields": ["*"],
+                    "transformStepMethod": "javascript",
+                    "outputFields": ["*"],
+                    "transformParams": {"codeName": "decode_mixing_tank"},
+                }
+            ],
+        },
+        confirm_write=True,
+    )
+
+    _action, forwarded_payload = connector_adapter.calls[-1]
+    assert "transformService" not in forwarded_payload
+    assert (
+        forwarded_payload["transformActions"][0]["transformService"]
+        == "v8TransformService"
+    )
+
+
+def test_compatibility_matrix_tool_results_strip_auth_token(monkeypatch: object) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    class _TokenEchoConnector:
+        def list_inputs(self, _payload: dict[str, object] | None = None) -> dict[str, object]:
+            return {
+                "authToken": "session-token",
+                "inputs": [{"name": "modbus_1", "authToken": "nested-token"}],
+            }
+
+    connector_adapter = _TokenEchoConnector()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["list_inputs"]()
+    assert "authToken" not in result
+    assert "authToken" not in result["inputs"][0]
+
+
+def test_compatibility_matrix_audit_records_outcome_target_and_timestamp(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+    connector_adapter = _CaptureConnectors()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    server.tools["create_input"](
+        payload={
+            "connectorName": "modbus_input",
+            "serviceName": "modbus",
+            "tableName": "modbus_energy_raw",
+            "modbusProtocol": "TCP",
+            "modbusServer": "127.0.0.1",
+            "modbusServerPort": 502,
+            "propertyMapList": [
+                {
+                    "propertyName": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                }
+            ],
+        },
+        confirm_write=True,
+    )
+
+    audit = server.tools["observability_audit"]()["events"]
+    attempt = next(event for event in audit if event["type"] == "connector_write_attempt")
+    result = next(event for event in audit if event["type"] == "connector_write_result")
+
+    assert "timestamp" in attempt
+    assert attempt["details"]["action"] == "createInput"
+    assert attempt["details"]["target"] == "modbus_input"
+    assert result["details"]["outcome"] == "success"
+    assert result["details"]["target"] == "modbus_input"

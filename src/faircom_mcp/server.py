@@ -140,6 +140,7 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
         "required": [
             "connectorName",
             "serviceName",
+            "tableName",
             "modbusProtocol",
             "modbusServer",
             "modbusServerPort",
@@ -184,7 +185,10 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
                             "type": "string",
                             "enum": _MODBUS_DATA_TYPE_ENUM,
                         },
-                        "modbusDataLen": {"type": ["integer", "number"]},
+                        "modbusDataLen": {
+                            "type": ["integer", "number"],
+                            "description": "Length in bytes for the selected modbusDataType.",
+                        },
                         "modbusUnitId": {"type": ["integer", "number"]},
                         "modbusConvertToFloat": {"type": "string"},
                         "modbusDivisor": {"type": ["integer", "number"]},
@@ -199,6 +203,7 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "connectorName": "modbus_energy_input",
             "inputName": "modbus_energy_input",
             "serviceName": "modbus",
+            "tableName": "modbus_energy_raw",
             "modbusProtocol": "TCP",
             "modbusServer": "127.0.0.1",
             "modbusServerPort": 502,
@@ -210,6 +215,13 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
                     "modbusDataAccess": "holdingregister",
                     "modbusDataType": "int16SignedAB",
                     "modbusDataLen": 2,
+                },
+                {
+                    "propertyName": "vibration",
+                    "modbusDataAddress": 1200,
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataType": "float32ABCD",
+                    "modbusDataLen": 4,
                 }
             ],
         },
@@ -236,13 +248,16 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "transformName": {"type": "string", "minLength": 1},
             "serviceName": {"type": "string", "const": "javascript"},
             "description": {"type": "string"},
-            "transformService": {"type": "string", "const": "v8TransformService"},
             "transformActions": {
                 "type": "array",
                 "minItems": 1,
                 "items": {
                     "type": "object",
                     "properties": {
+                        "transformService": {
+                            "type": "string",
+                            "const": "v8TransformService",
+                        },
                         "inputFields": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -262,14 +277,14 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
         "example": {
             "transformName": "add_asset_id",
             "serviceName": "javascript",
-            "transformService": "v8TransformService",
             "transformActions": [
                 {
+                    "transformService": "v8TransformService",
                     "inputFields": ["*"],
                     "transformStepMethod": "javascript",
                     "outputFields": ["*"],
                     "transformParams": {
-                        "script": "payload.asset_id = 'asset-001'; return payload;",
+                        "codeName": "decode_mixing_tank",
                     },
                 }
             ],
@@ -351,6 +366,74 @@ def create_server(
             status="success",
             duration_seconds=time.perf_counter() - started,
         )
+        return _redact_sensitive_fields(result)
+
+    def _redact_sensitive_fields(value: object) -> object:
+        if isinstance(value, dict):
+            sanitized: dict[object, object] = {}
+            for key, nested_value in value.items():
+                if isinstance(key, str) and key.lower() == "authtoken":
+                    continue
+                sanitized[key] = _redact_sensitive_fields(nested_value)
+            return sanitized
+        if isinstance(value, list):
+            return [_redact_sensitive_fields(item) for item in value]
+        return value
+
+    def _connector_target_name(payload: object) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+        for key in ("connectorName", "inputName", "transformName"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def _execute_connector_write(
+        *,
+        tool_name: str,
+        action: str,
+        target: str | None,
+        writer: Callable[[], object],
+    ) -> object:
+        try:
+            result = writer()
+        except FaircomError as exc:
+            audit_log.record(
+                event_type="connector_write_result",
+                details={
+                    "tool": tool_name,
+                    "action": action,
+                    "target": target,
+                    "outcome": "failed",
+                    "error_code": str(exc.code),
+                    "error_message": exc.message,
+                },
+            )
+            raise
+        except Exception as exc:
+            audit_log.record(
+                event_type="connector_write_result",
+                details={
+                    "tool": tool_name,
+                    "action": action,
+                    "target": target,
+                    "outcome": "failed",
+                    "error_code": "unexpected_exception",
+                    "error_message": str(exc),
+                },
+            )
+            raise
+
+        audit_log.record(
+            event_type="connector_write_result",
+            details={
+                "tool": tool_name,
+                "action": action,
+                "target": target,
+                "outcome": "success",
+            },
+        )
         return result
 
     def _validation_failure(
@@ -406,13 +489,31 @@ def create_server(
         action: str,
         payload: ConnectorPayload | None,
     ) -> dict[str, object]:
-        validation = _validate_connector_schema(
-            tool_name=tool_name,
-            action=action,
-            payload=payload,
-        )
-        validation_warnings = cast(list[str], validation.get("warnings", []))
-        if validation["status"] == "invalid":
+        normalized_payload = payload
+        try:
+            normalized_payload = _require_connector_payload(
+                tool_name=tool_name,
+                payload=payload,
+                action=action,
+            )
+        except ValidationFailure as exc:
+            received_args = exc.details.get("received_args", {})
+            validation_errors = received_args.get("validation_errors")
+            if not isinstance(validation_errors, list) or not validation_errors:
+                validation_errors = [
+                    {
+                        "path": "payload",
+                        "json_pointer": "/payload",
+                        "reason": "invalid_arguments",
+                        "message": str(exc.message),
+                    }
+                ]
+            validation = _validate_connector_schema(
+                tool_name=tool_name,
+                action=action,
+                payload=payload,
+            )
+            validation_warnings = cast(list[str], validation.get("warnings", []))
             return {
                 "mode": "dry_run",
                 "status": "invalid",
@@ -431,7 +532,7 @@ def create_server(
                     "schema_validated": True,
                     "schema_status": "invalid",
                 },
-                "validation_errors": validation["errors"],
+                "validation_errors": validation_errors,
                 "warnings": [
                     "Dry run is a local preview only and does not call FairCom backend APIs.",
                     *validation_warnings,
@@ -439,9 +540,16 @@ def create_server(
                 "hint": "Fix validation_errors and run dry_run again before confirm_write=True.",
             }
 
+        validation = _validate_connector_schema(
+            tool_name=tool_name,
+            action=action,
+            payload=normalized_payload,
+        )
+        validation_warnings = cast(list[str], validation.get("warnings", []))
+
         schema_validated = validation["status"] == "validated"
         schema_outcome = "schema_valid" if schema_validated else "unvalidated"
-        forwarded_payload = transform_connector_request(action, payload)
+        forwarded_payload = transform_connector_request(action, normalized_payload)
         warnings = [
             "Dry run is a local preview only and does not call FairCom backend APIs.",
             (
@@ -462,7 +570,7 @@ def create_server(
             "status": "success",
             "tool_name": tool_name,
             "action": action,
-            "payload": payload,
+            "payload": normalized_payload,
             "forwarded_payload": forwarded_payload,
             "schema_outcome": schema_outcome,
             "execution_status": "not_executed",
@@ -473,7 +581,7 @@ def create_server(
             ),
             "preview_details": {
                 "action": action,
-                "target": payload or {},
+                "target": normalized_payload or {},
                 "forwarded_payload": forwarded_payload,
                 "row_estimate": "unknown",
                 "upstream_validated": False,
@@ -529,6 +637,8 @@ def create_server(
             "alterInput",
             "createOutput",
             "alterOutput",
+            "createTransform",
+            "alterTransform",
         }
         modbus_create_or_alter = service_name == "modbus" and action in {
             "createInput",
@@ -569,6 +679,7 @@ def create_server(
         def _modbus_minimal_snippet() -> dict[str, object]:
             return {
                 "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
                 "modbusProtocol": "TCP",
                 "modbusServer": "127.0.0.1",
                 "modbusServerPort": 502,
@@ -640,11 +751,35 @@ def create_server(
                     )
 
         if service_name == "javascript" and action in {"createTransform", "alterTransform"}:
+            root_transform_service = payload.get("transformService")
             transform_actions = payload.get("transformActions")
             if isinstance(transform_actions, list):
                 for index, action_entry in enumerate(transform_actions):
                     if not isinstance(action_entry, dict):
                         continue
+
+                    action_transform_service = action_entry.get("transformService")
+                    effective_transform_service = action_transform_service
+                    has_action_transform_service = (
+                        isinstance(effective_transform_service, str)
+                        and bool(effective_transform_service.strip())
+                    )
+                    if not has_action_transform_service:
+                        effective_transform_service = root_transform_service
+
+                    has_root_transform_service = (
+                        isinstance(root_transform_service, str)
+                        and bool(root_transform_service.strip())
+                    )
+                    has_action_transform_service = (
+                        isinstance(action_transform_service, str)
+                        and bool(action_transform_service.strip())
+                    )
+                    if has_root_transform_service and not has_action_transform_service:
+                        warnings.append(
+                            "payload.transformService is deprecated for javascript transforms; "
+                            "provide transformService per action under payload.transformActions[]."
+                        )
 
                     step_method_raw = action_entry.get("transformStepMethod")
                     if not isinstance(step_method_raw, str) or not step_method_raw.strip():
@@ -655,6 +790,42 @@ def create_server(
                         else None
                     )
                     if step_method not in {"jsonToDifferentTableFields", "jsonToTableFields"}:
+                        if step_method == "javascript":
+                            if (
+                                not isinstance(effective_transform_service, str)
+                                or effective_transform_service.strip() != "v8TransformService"
+                            ):
+                                errors.append(
+                                    _validation_error(
+                                        path=f"payload.transformActions[{index}].transformService",
+                                        reason="required",
+                                        message=(
+                                            "transformService='v8TransformService' is required "
+                                            "for javascript transform steps"
+                                        ),
+                                    )
+                                )
+
+                            transform_params = action_entry.get("transformParams")
+                            code_name = (
+                                transform_params.get("codeName")
+                                if isinstance(transform_params, dict)
+                                else None
+                            )
+                            if not isinstance(code_name, str) or not code_name.strip():
+                                errors.append(
+                                    _validation_error(
+                                        path=(
+                                            "payload.transformActions"
+                                            f"[{index}].transformParams.codeName"
+                                        ),
+                                        reason="required",
+                                        message=(
+                                            "transformParams.codeName is required for "
+                                            "javascript transform steps."
+                                        ),
+                                    )
+                                )
                         continue
 
                     output_fields = action_entry.get("outputFields")
@@ -1154,6 +1325,11 @@ def create_server(
                 normalized_payload["propertyMapList"] = normalized_entries
 
         if isinstance(service_name, str) and service_name.strip().lower() == "javascript":
+            root_transform_service = normalized_payload.get("transformService")
+            normalized_root_transform_service = None
+            if isinstance(root_transform_service, str) and root_transform_service.strip():
+                normalized_root_transform_service = root_transform_service.strip()
+
             transform_actions = normalized_payload.get("transformActions")
             if isinstance(transform_actions, list):
                 normalized_actions: list[dict[str, object]] = []
@@ -1172,8 +1348,21 @@ def create_server(
                         normalized_action["transformStepMethod"] = action_name.strip()
                     elif isinstance(step_method, str) and step_method.strip():
                         normalized_action["transformStepMethod"] = step_method.strip()
+
+                    action_transform_service = normalized_action.get("transformService")
+                    if (
+                        isinstance(action_transform_service, str)
+                        and action_transform_service.strip()
+                    ):
+                        normalized_action["transformService"] = action_transform_service.strip()
+                    elif normalized_root_transform_service is not None:
+                        normalized_action["transformService"] = normalized_root_transform_service
+
                     normalized_actions.append(normalized_action)
                 normalized_payload["transformActions"] = normalized_actions
+
+            # Action-level transformService is canonical for forwarding and validation.
+            normalized_payload.pop("transformService", None)
 
         typed_payload = cast(ConnectorPayload, normalized_payload)
 
@@ -1544,7 +1733,13 @@ def create_server(
     ) -> object:
         audit_log.record(
             event_type="connector_write_attempt",
-            details={"tool": "create_input", "dry_run": dry_run, "confirm_write": confirm_write},
+            details={
+                "tool": "create_input",
+                "action": "createInput",
+                "target": _connector_target_name(payload),
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
         )
         if dry_run:
             return _run_tool(
@@ -1585,10 +1780,15 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _run_tool(
-            "create_input",
-            "connector",
-            lambda: connector_adapter.create_input(resolved_payload),
+        result = _execute_connector_write(
+            tool_name="create_input",
+            action="createInput",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "create_input",
+                "connector",
+                lambda: connector_adapter.create_input(resolved_payload),
+            ),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -1618,7 +1818,13 @@ def create_server(
     ) -> object:
         audit_log.record(
             event_type="connector_write_attempt",
-            details={"tool": "alter_input", "dry_run": dry_run, "confirm_write": confirm_write},
+            details={
+                "tool": "alter_input",
+                "action": "alterInput",
+                "target": _connector_target_name(payload),
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
         )
         if dry_run:
             return _run_tool(
@@ -1659,10 +1865,15 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _run_tool(
-            "alter_input",
-            "connector",
-            lambda: connector_adapter.alter_input(resolved_payload),
+        result = _execute_connector_write(
+            tool_name="alter_input",
+            action="alterInput",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "alter_input",
+                "connector",
+                lambda: connector_adapter.alter_input(resolved_payload),
+            ),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -1692,7 +1903,13 @@ def create_server(
     ) -> object:
         audit_log.record(
             event_type="connector_write_attempt",
-            details={"tool": "delete_input", "dry_run": dry_run, "confirm_write": confirm_write},
+            details={
+                "tool": "delete_input",
+                "action": "deleteInput",
+                "target": _connector_target_name(payload),
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
         )
         if dry_run:
             return _run_tool(
@@ -1733,10 +1950,15 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _run_tool(
-            "delete_input",
-            "connector",
-            lambda: connector_adapter.delete_input(resolved_payload),
+        result = _execute_connector_write(
+            tool_name="delete_input",
+            action="deleteInput",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "delete_input",
+                "connector",
+                lambda: connector_adapter.delete_input(resolved_payload),
+            ),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -1790,7 +2012,13 @@ def create_server(
     ) -> object:
         audit_log.record(
             event_type="connector_write_attempt",
-            details={"tool": "create_output", "dry_run": dry_run, "confirm_write": confirm_write},
+            details={
+                "tool": "create_output",
+                "action": "createOutput",
+                "target": _connector_target_name(payload),
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
         )
         if dry_run:
             return _run_tool(
@@ -1831,10 +2059,15 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _run_tool(
-            "create_output",
-            "connector",
-            lambda: connector_adapter.create_output(resolved_payload),
+        result = _execute_connector_write(
+            tool_name="create_output",
+            action="createOutput",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "create_output",
+                "connector",
+                lambda: connector_adapter.create_output(resolved_payload),
+            ),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -1864,7 +2097,13 @@ def create_server(
     ) -> object:
         audit_log.record(
             event_type="connector_write_attempt",
-            details={"tool": "alter_output", "dry_run": dry_run, "confirm_write": confirm_write},
+            details={
+                "tool": "alter_output",
+                "action": "alterOutput",
+                "target": _connector_target_name(payload),
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
         )
         if dry_run:
             return _run_tool(
@@ -1905,10 +2144,15 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _run_tool(
-            "alter_output",
-            "connector",
-            lambda: connector_adapter.alter_output(resolved_payload),
+        result = _execute_connector_write(
+            tool_name="alter_output",
+            action="alterOutput",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "alter_output",
+                "connector",
+                lambda: connector_adapter.alter_output(resolved_payload),
+            ),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -1938,7 +2182,13 @@ def create_server(
     ) -> object:
         audit_log.record(
             event_type="connector_write_attempt",
-            details={"tool": "delete_output", "dry_run": dry_run, "confirm_write": confirm_write},
+            details={
+                "tool": "delete_output",
+                "action": "deleteOutput",
+                "target": _connector_target_name(payload),
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
         )
         if dry_run:
             return _run_tool(
@@ -1979,10 +2229,15 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _run_tool(
-            "delete_output",
-            "connector",
-            lambda: connector_adapter.delete_output(resolved_payload),
+        result = _execute_connector_write(
+            tool_name="delete_output",
+            action="deleteOutput",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "delete_output",
+                "connector",
+                lambda: connector_adapter.delete_output(resolved_payload),
+            ),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -2038,6 +2293,8 @@ def create_server(
             event_type="connector_write_attempt",
             details={
                 "tool": "create_transform",
+                "action": "createTransform",
+                "target": _connector_target_name(payload),
                 "dry_run": dry_run,
                 "confirm_write": confirm_write,
             },
@@ -2081,10 +2338,15 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _run_tool(
-            "create_transform",
-            "connector",
-            lambda: connector_adapter.create_transform(resolved_payload),
+        result = _execute_connector_write(
+            tool_name="create_transform",
+            action="createTransform",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "create_transform",
+                "connector",
+                lambda: connector_adapter.create_transform(resolved_payload),
+            ),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -2116,6 +2378,8 @@ def create_server(
             event_type="connector_write_attempt",
             details={
                 "tool": "alter_transform",
+                "action": "alterTransform",
+                "target": _connector_target_name(payload),
                 "dry_run": dry_run,
                 "confirm_write": confirm_write,
             },
@@ -2159,10 +2423,15 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _run_tool(
-            "alter_transform",
-            "connector",
-            lambda: connector_adapter.alter_transform(resolved_payload),
+        result = _execute_connector_write(
+            tool_name="alter_transform",
+            action="alterTransform",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "alter_transform",
+                "connector",
+                lambda: connector_adapter.alter_transform(resolved_payload),
+            ),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -2194,6 +2463,8 @@ def create_server(
             event_type="connector_write_attempt",
             details={
                 "tool": "delete_transform",
+                "action": "deleteTransform",
+                "target": _connector_target_name(payload),
                 "dry_run": dry_run,
                 "confirm_write": confirm_write,
             },
@@ -2237,10 +2508,15 @@ def create_server(
                 },
                 reason_code="missing_write_confirmation",
             )
-        result = _run_tool(
-            "delete_transform",
-            "connector",
-            lambda: connector_adapter.delete_transform(resolved_payload),
+        result = _execute_connector_write(
+            tool_name="delete_transform",
+            action="deleteTransform",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "delete_transform",
+                "connector",
+                lambda: connector_adapter.delete_transform(resolved_payload),
+            ),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -2501,6 +2777,7 @@ def create_server(
                                 "connectorName": "modbus_energy_input",
                                 "inputName": "modbus_energy_input",
                                 "serviceName": "modbus",
+                                "tableName": "modbus_energy_raw",
                                 "modbusProtocol": "TCP",
                                 "modbusServer": "127.0.0.1",
                                 "modbusServerPort": 502,
@@ -2531,17 +2808,13 @@ def create_server(
                             "payload": {
                                 "transformName": "add_asset_id",
                                 "serviceName": "javascript",
-                                "transformService": "v8TransformService",
                                 "transformActions": [
                                     {
+                                        "transformService": "v8TransformService",
                                         "inputFields": ["*"],
                                         "transformStepMethod": "javascript",
                                         "outputFields": ["*"],
-                                        "transformParams": {
-                                            "script": (
-                                                "payload.asset_id = 'asset-001'; return payload;"
-                                            )
-                                        },
+                                        "transformParams": {"codeName": "decode_mixing_tank"},
                                     }
                                 ],
                             },
@@ -2560,6 +2833,7 @@ def create_server(
                                 {
                                     "connectorName": "modbus_energy_input",
                                     "serviceName": "modbus",
+                                    "tableName": "modbus_energy_raw",
                                     "modbusProtocol": "TCP",
                                     "modbusServer": "127.0.0.1",
                                     "modbusServerPort": 502,
@@ -2580,7 +2854,7 @@ def create_server(
                     "list_tables": "complete",
                     "create_input": "complete",
                     "create_output": "complete",
-                    "create_transform": "complete",
+                    "create_transform": "requires_existing_code_package",
                     "describe_connector_schema": "complete",
                     "validate_connector_payloads": "complete",
                 },
@@ -2628,6 +2902,9 @@ def create_server(
             "createOutput",
             "alterOutput",
             "deleteOutput",
+            "createTransform",
+            "alterTransform",
+            "deleteTransform",
         ] = "createInput",
         payload: ConnectorPayload | None = None,
         payloads: ConnectorPayloadBatch | None = None,
@@ -2639,7 +2916,8 @@ def create_server(
                 expected_args={
                     "action": (
                         "one of createInput/alterInput/deleteInput/"
-                        "createOutput/alterOutput/deleteOutput"
+                        "createOutput/alterOutput/deleteOutput/"
+                        "createTransform/alterTransform/deleteTransform"
                     ),
                     "payload": "object (optional, single preflight)",
                     "payloads": "array<object> (optional, batch preflight)",
@@ -2653,6 +2931,7 @@ def create_server(
                         "payload": {
                             "connectorName": "modbus_energy_input",
                             "serviceName": "modbus",
+                            "tableName": "modbus_energy_raw",
                             "modbusProtocol": "TCP",
                             "modbusServer": "127.0.0.1",
                             "modbusServerPort": 502,
@@ -2669,7 +2948,8 @@ def create_server(
                 expected_args={
                     "action": (
                         "one of createInput/alterInput/deleteInput/"
-                        "createOutput/alterOutput/deleteOutput"
+                        "createOutput/alterOutput/deleteOutput/"
+                        "createTransform/alterTransform/deleteTransform"
                     ),
                     "payload": "object (optional, single preflight)",
                     "payloads": "array<object> (optional, batch preflight)",
@@ -2684,6 +2964,7 @@ def create_server(
                             {
                                 "connectorName": "modbus_energy_input",
                                 "serviceName": "modbus",
+                                "tableName": "modbus_energy_raw",
                                 "modbusProtocol": "TCP",
                                 "modbusServer": "127.0.0.1",
                                 "modbusServerPort": 502,
