@@ -183,6 +183,8 @@ def test_connector_adapter_translates_modbus_input_payload_to_settings_shape() -
                 "serviceName": "modbus",
                 "thingName": "PLC 74",
                 "tableName": "modbusTableTCP",
+                "transformName": "normalize_energy_data",
+                "dataCollectionIntervalMilliseconds": 500,
                 "settings": {
                     "transformName": "normalize_energy_data",
                     "dataCollectionIntervalMilliseconds": 500,
@@ -198,6 +200,40 @@ def test_connector_adapter_translates_modbus_input_payload_to_settings_shape() -
                             "modbusDataLen": 1,
                         }
                     ],
+                },
+            },
+        )
+    ]
+
+
+def test_connector_adapter_prefers_explicit_top_level_modbus_over_existing_settings() -> None:
+    client = StubClient()
+    adapter = ConnectorAdapter(cast(Any, client))
+
+    adapter.alter_input(
+        {
+            "inputName": "modbus_1",
+            "serviceName": "modbus",
+            "transformName": "new_transform",
+            "dataCollectionIntervalMilliseconds": 1500,
+            "settings": {
+                "transformName": "old_transform",
+                "dataCollectionIntervalMilliseconds": 500,
+            },
+        }
+    )
+
+    assert client.calls == [
+        (
+            "hub:alterInput",
+            {
+                "inputName": "modbus_1",
+                "serviceName": "modbus",
+                "transformName": "new_transform",
+                "dataCollectionIntervalMilliseconds": 1500,
+                "settings": {
+                    "transformName": "new_transform",
+                    "dataCollectionIntervalMilliseconds": 1500,
                 },
             },
         )

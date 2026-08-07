@@ -493,3 +493,122 @@ def test_compatibility_matrix_connector_preflight_batch_mixed(monkeypatch: objec
         "coil",
         "discreteinput",
     ]
+
+
+def test_compatibility_matrix_transform_methods_require_output_fields_and_mapping(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="createTransform",
+        payload={
+            "transformName": "typed_asset01",
+            "serviceName": "javascript",
+            "transformActions": [
+                {
+                    "inputFields": ["source_payload"],
+                    "transformStepMethod": "jsonToDifferentTableFields",
+                    "transformParams": {},
+                }
+            ],
+        },
+    )
+
+    assert result["summary"]["all_valid"] is False
+    issues = result["results"][0]["errors"]
+    assert any(issue["path"].endswith(".outputFields") for issue in issues)
+    assert any(
+        issue["path"].endswith(".transformParams.mapOfPropertiesToFields")
+        for issue in issues
+    )
+
+
+def test_compatibility_matrix_modbus_divisor_sets_divide_by_integer(monkeypatch: object) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+    connector_adapter = _CaptureConnectors()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["create_input"](
+        payload={
+            "connectorName": "modbus_input",
+            "serviceName": "modbus",
+            "modbusProtocol": "TCP",
+            "modbusServer": "127.0.0.1",
+            "modbusServerPort": 502,
+            "propertyMapList": [
+                {
+                    "propertyName": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                    "modbusDataType": "int16SignedAB",
+                    "modbusDivisor": 10,
+                }
+            ],
+        },
+        confirm_write=True,
+    )
+
+    assert result["action"] == "createInput"
+    _action, forwarded_payload = connector_adapter.calls[-1]
+    forwarded_property_map = forwarded_payload["propertyMapList"][0]
+    assert forwarded_property_map["modbusConvertToFloat"] == "divideByInteger"
+    assert forwarded_property_map["modbusDivisor"] == 10
+    assert forwarded_property_map["modbusRegisterType"] == "int16SignedAB"
+
+
+def test_compatibility_matrix_transform_action_name_alias_normalized(monkeypatch: object) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    class _CaptureTransformConnector:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def create_transform(self, payload: dict[str, object]) -> dict[str, object]:
+            self.calls.append(("createTransform", payload))
+            return {"action": "createTransform", "payload": payload}
+
+    connector_adapter = _CaptureTransformConnector()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["create_transform"](
+        payload={
+            "transformName": "typed_asset01",
+            "serviceName": "javascript",
+            "transformActions": [
+                {
+                    "inputFields": ["source_payload"],
+                    "transformActionName": "jsonToTableFields",
+                    "outputFields": ["*"],
+                    "transformParams": {
+                        "mapOfPropertiesToFields": [
+                            {
+                                "recordPath": "source_payload.temperature",
+                                "fieldName": "temperature",
+                            }
+                        ]
+                    },
+                }
+            ],
+        },
+        confirm_write=True,
+    )
+
+    assert result["action"] == "createTransform"
+    _action, forwarded_payload = connector_adapter.calls[-1]
+    step_method = forwarded_payload["transformActions"][0]["transformStepMethod"]
+    assert step_method == "jsonToTableFields"

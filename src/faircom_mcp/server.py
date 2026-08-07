@@ -58,6 +58,7 @@ _MODBUS_ALLOWED_PAYLOAD_KEYS = {
     "description",
     "unitId",
     "transformName",
+    "disableTransformSteps",
     "dataCollectionIntervalMilliseconds",
     "propertyMapList",
     "settings",
@@ -71,6 +72,7 @@ _MODBUS_ALLOWED_PROPERTY_MAP_KEYS = {
     "modbusDataAccess",
     "modbusDataAddress",
     "modbusDataType",
+    "modbusRegisterType",
     "modbusDataLen",
     "modbusUnitId",
     "modbusConvertToFloat",
@@ -87,6 +89,7 @@ class ModbusPropertyMapItem(TypedDict, total=False):
     propertyPath: str
     modbusDataAddress: int
     modbusDataType: str
+    modbusRegisterType: str
     modbusDataLen: int | float
     modbusUnitId: int
     modbusConvertToFloat: str
@@ -109,6 +112,7 @@ class ModbusConnectorPayload(TypedDict, total=False):
     description: str
     unitId: int
     transformName: str
+    disableTransformSteps: bool
     dataCollectionIntervalMilliseconds: int
     propertyMapList: Required[list[ModbusPropertyMapItem]]
     inputName: str
@@ -156,6 +160,7 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "description": {"type": "string"},
             "unitId": {"type": ["integer", "number"]},
             "transformName": {"type": "string", "minLength": 1},
+            "disableTransformSteps": {"type": "boolean"},
             "dataCollectionIntervalMilliseconds": {"type": ["integer", "number"]},
             "propertyMapList": {
                 "type": "array",
@@ -172,6 +177,10 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
                         },
                         "modbusDataAddress": {"type": ["integer", "number"]},
                         "modbusDataType": {
+                            "type": "string",
+                            "enum": _MODBUS_DATA_TYPE_ENUM,
+                        },
+                        "modbusRegisterType": {
                             "type": "string",
                             "enum": _MODBUS_DATA_TYPE_ENUM,
                         },
@@ -630,6 +639,75 @@ def create_server(
                         )
                     )
 
+        if service_name == "javascript" and action in {"createTransform", "alterTransform"}:
+            transform_actions = payload.get("transformActions")
+            if isinstance(transform_actions, list):
+                for index, action_entry in enumerate(transform_actions):
+                    if not isinstance(action_entry, dict):
+                        continue
+
+                    step_method_raw = action_entry.get("transformStepMethod")
+                    if not isinstance(step_method_raw, str) or not step_method_raw.strip():
+                        step_method_raw = action_entry.get("transformActionName")
+                    step_method = (
+                        step_method_raw.strip()
+                        if isinstance(step_method_raw, str) and step_method_raw.strip()
+                        else None
+                    )
+                    if step_method not in {"jsonToDifferentTableFields", "jsonToTableFields"}:
+                        continue
+
+                    output_fields = action_entry.get("outputFields")
+                    if not isinstance(output_fields, list) or not output_fields:
+                        errors.append(
+                            _validation_error(
+                                path=f"payload.transformActions[{index}].outputFields",
+                                reason="required",
+                                message=(
+                                    "outputFields is required for transformStepMethod "
+                                    f"{step_method}"
+                                ),
+                                details={
+                                    "corrected_snippet": {
+                                        "outputFields": ["*"],
+                                    }
+                                },
+                            )
+                        )
+
+                    transform_params = action_entry.get("transformParams")
+                    map_of_properties = (
+                        transform_params.get("mapOfPropertiesToFields")
+                        if isinstance(transform_params, dict)
+                        else None
+                    )
+                    if not isinstance(map_of_properties, list) or not map_of_properties:
+                        errors.append(
+                            _validation_error(
+                                path=(
+                                    "payload.transformActions"
+                                    f"[{index}].transformParams.mapOfPropertiesToFields"
+                                ),
+                                reason="required",
+                                message=(
+                                    "transformParams.mapOfPropertiesToFields is required for "
+                                    f"transformStepMethod {step_method}"
+                                ),
+                                details={
+                                    "corrected_snippet": {
+                                        "transformParams": {
+                                            "mapOfPropertiesToFields": [
+                                                {
+                                                    "recordPath": "source_payload.temperature",
+                                                    "fieldName": "temperature",
+                                                }
+                                            ]
+                                        }
+                                    }
+                                },
+                            )
+                        )
+
         if modbus_create_or_alter:
             for key in payload:
                 if key in _MODBUS_ALLOWED_PAYLOAD_KEYS:
@@ -808,6 +886,33 @@ def create_server(
                         )
 
                     data_type = entry.get("modbusDataType")
+                    register_type = entry.get("modbusRegisterType")
+                    normalized_type = None
+                    if isinstance(data_type, str) and data_type.strip():
+                        normalized_type = data_type.strip()
+                    if isinstance(register_type, str) and register_type.strip():
+                        normalized_register_type = register_type.strip()
+                        if normalized_type is None:
+                            normalized_type = normalized_register_type
+                        elif normalized_register_type != normalized_type:
+                            errors.append(
+                                _validation_error(
+                                    path=f"payload.propertyMapList[{index}]",
+                                    reason="invalid_arguments",
+                                    message=(
+                                        "modbusDataType and modbusRegisterType conflict; "
+                                        "provide only one or make them match"
+                                    ),
+                                    details={
+                                        "received": {
+                                            "modbusDataType": data_type,
+                                            "modbusRegisterType": register_type,
+                                        }
+                                    },
+                                )
+                            )
+
+                    data_type = normalized_type
                     if isinstance(data_type, str) and data_type.strip():
                         data_type_normalized = data_type.strip()
                         if data_type_normalized not in _MODBUS_DATA_TYPE_ENUM:
@@ -880,6 +985,21 @@ def create_server(
                                 },
                             )
                         )
+
+                    divisor = entry.get("modbusDivisor")
+                    convert_to_float = entry.get("modbusConvertToFloat")
+                    if isinstance(divisor, float) and divisor.is_integer():
+                        divisor = int(divisor)
+                    if isinstance(divisor, int) and divisor > 1:
+                        if not isinstance(convert_to_float, str) or not convert_to_float.strip():
+                            warnings.append(
+                                (
+                                    "payload.propertyMapList"
+                                    f"[{index}].modbusDivisor was provided without "
+                                    "modbusConvertToFloat; MCP will normalize this to "
+                                    "divideByInteger on write requests."
+                                )
+                            )
 
         status = "validated" if not errors else "invalid"
         return {
@@ -984,6 +1104,16 @@ def create_server(
 
                     normalized_entry = dict(entry)
 
+                    # Accept either field name used in documentation and normalize both.
+                    data_type = normalized_entry.get("modbusDataType")
+                    register_type = normalized_entry.get("modbusRegisterType")
+                    if isinstance(data_type, str) and data_type.strip():
+                        normalized_entry["modbusDataType"] = data_type.strip()
+                        normalized_entry.setdefault("modbusRegisterType", data_type.strip())
+                    elif isinstance(register_type, str) and register_type.strip():
+                        normalized_entry["modbusRegisterType"] = register_type.strip()
+                        normalized_entry["modbusDataType"] = register_type.strip()
+
                     property_name = normalized_entry.get("propertyName")
                     if (
                         isinstance(property_name, str)
@@ -1007,9 +1137,42 @@ def create_server(
                             normalized_entry["modbusConvertToFloat"] = "divideByInteger"
                             normalized_entry["modbusDivisor"] = int(inverse_scale)
 
+                    divisor = normalized_entry.get("modbusDivisor")
+                    if isinstance(divisor, float) and divisor.is_integer():
+                        divisor = int(divisor)
+                        normalized_entry["modbusDivisor"] = divisor
+                    if (
+                        isinstance(divisor, int)
+                        and divisor > 1
+                        and "modbusConvertToFloat" not in normalized_entry
+                    ):
+                        normalized_entry["modbusConvertToFloat"] = "divideByInteger"
+
                     normalized_entries.append(normalized_entry)
 
                 normalized_payload["propertyMapList"] = normalized_entries
+
+        if isinstance(service_name, str) and service_name.strip().lower() == "javascript":
+            transform_actions = normalized_payload.get("transformActions")
+            if isinstance(transform_actions, list):
+                normalized_actions: list[dict[str, object]] = []
+                for action_entry in transform_actions:
+                    if not isinstance(action_entry, dict):
+                        normalized_actions.append(action_entry)
+                        continue
+                    normalized_action = dict(action_entry)
+                    step_method = normalized_action.get("transformStepMethod")
+                    action_name = normalized_action.get("transformActionName")
+                    if (
+                        (not isinstance(step_method, str) or not step_method.strip())
+                        and isinstance(action_name, str)
+                        and action_name.strip()
+                    ):
+                        normalized_action["transformStepMethod"] = action_name.strip()
+                    elif isinstance(step_method, str) and step_method.strip():
+                        normalized_action["transformStepMethod"] = step_method.strip()
+                    normalized_actions.append(normalized_action)
+                normalized_payload["transformActions"] = normalized_actions
 
         typed_payload = cast(ConnectorPayload, normalized_payload)
 

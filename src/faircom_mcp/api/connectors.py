@@ -20,8 +20,15 @@ _MODBUS_SETTINGS_KEYS = {
     "modbusByteOrder",
     "modbusWordOrder",
     "transformName",
+    "disableTransformSteps",
     "dataCollectionIntervalMilliseconds",
     "propertyMapList",
+}
+
+_MODBUS_SETTINGS_MIRROR_ONLY_KEYS = {
+    "transformName",
+    "dataCollectionIntervalMilliseconds",
+    "disableTransformSteps",
 }
 
 
@@ -66,8 +73,10 @@ def transform_connector_request(
         existing_settings = transformed.get("settings")
         settings = dict(existing_settings) if isinstance(existing_settings, Mapping) else {}
         for key in list(transformed.keys()):
-            if key in _MODBUS_SETTINGS_KEYS and key not in settings:
-                settings[key] = transformed.pop(key)
+            if key in _MODBUS_SETTINGS_KEYS:
+                settings[key] = transformed[key]
+                if key not in _MODBUS_SETTINGS_MIRROR_ONLY_KEYS:
+                    transformed.pop(key, None)
         transformed["settings"] = settings
 
     return transformed
