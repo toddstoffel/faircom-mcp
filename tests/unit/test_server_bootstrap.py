@@ -465,9 +465,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         code_name="decode_mixing_tank"
     )
     assert "FROM codepackage_name n" in describe_code_package_result["statement"]
-    assert "c.created_by, c.updated_by, c.code, c.comment" in describe_code_package_result[
-        "statement"
-    ]
+    assert (
+        "c.created_by, c.updated_by, c.code, c.comment" in describe_code_package_result["statement"]
+    )
 
     register_code_package_dry_run = server.tools["register_code_package"](
         code_name="decode_mixing_tank",
@@ -600,8 +600,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         for tool in capabilities["tools"]
     )
     assert any(
-        tool["name"] == "create_input" and "aliases" not in tool
-        for tool in capabilities["tools"]
+        tool["name"] == "create_input" and "aliases" not in tool for tool in capabilities["tools"]
     )
     assert any(
         tool["name"] == "describe_connector_schema" and tool["group"] == "admin"

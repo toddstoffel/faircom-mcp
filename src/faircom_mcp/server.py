@@ -881,12 +881,8 @@ def create_server(
                             )
                             has_code_name = isinstance(code_name, str) and bool(code_name.strip())
                             has_inline_code = (
-                                isinstance(inline_script, str)
-                                and bool(inline_script.strip())
-                            ) or (
-                                isinstance(inline_code, str)
-                                and bool(inline_code.strip())
-                            )
+                                isinstance(inline_script, str) and bool(inline_script.strip())
+                            ) or (isinstance(inline_code, str) and bool(inline_code.strip()))
                             if not has_code_name and not has_inline_code:
                                 errors.append(
                                     _validation_error(
@@ -1854,8 +1850,7 @@ def create_server(
                 return [_normalize_input_descriptions(item) for item in value]
             if isinstance(value, dict):
                 normalized = {
-                    key: _normalize_input_descriptions(nested)
-                    for key, nested in value.items()
+                    key: _normalize_input_descriptions(nested) for key, nested in value.items()
                 }
                 for container_name in (
                     "settings",
@@ -3584,8 +3579,7 @@ def create_server(
                 raise _validation_failure(
                     tool_name="register_code_package",
                     message=(
-                        "JavaScript syntax validation failed"
-                        f"{line_context}: {parser_message}"
+                        f"JavaScript syntax validation failed{line_context}: {parser_message}"
                     ),
                     expected_args={"code": "valid JavaScript source"},
                     received_args=syntax_details,
@@ -3692,8 +3686,7 @@ def create_server(
                     "dry_run": dry_run,
                 },
                 suggested_fix=(
-                    "Set confirm_write=true to apply the change or dry_run=true "
-                    "to preview it."
+                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
                 ),
                 example_payload={
                     "name": "register_code_package",
@@ -3709,9 +3702,7 @@ def create_server(
         def _run_registration() -> dict[str, object]:
             existing_name_rows = _extract_sql_rows(sql_adapter.query(select_identity_sql))
             codepackage_id = (
-                _as_int(existing_name_rows[0].get("id"))
-                if existing_name_rows
-                else None
+                _as_int(existing_name_rows[0].get("id")) if existing_name_rows else None
             )
             name_inserted = False
 
@@ -3915,345 +3906,350 @@ def create_server(
         return _run_tool(
             "capabilities_summary",
             "admin",
-            lambda: _strip_tool_aliases({
-                "service": {
-                    "name": "faircom-mcp",
-                    "version": __version__,
-                    "compatibility": {
-                        "faircom": ["Edge", "DB", "RTG", "ISAM", "MQ"],
-                        "transport": ["http", "sse", "stdio"],
+            lambda: _strip_tool_aliases(
+                {
+                    "service": {
+                        "name": "faircom-mcp",
+                        "version": __version__,
+                        "compatibility": {
+                            "faircom": ["Edge", "DB", "RTG", "ISAM", "MQ"],
+                            "transport": ["http", "sse", "stdio"],
+                        },
                     },
-                },
-                "transport_modes": [
-                    {"name": "http", "status": "available"},
-                    {"name": "sse", "status": "available"},
-                    {"name": "stdio", "status": "available"},
-                ],
-                "security": {
-                    "tool_groups": list(resolved_config.security.tool_group_allowlist),
-                    "default_policy": resolved_config.security.policy_preset or "default",
-                    "read_write_enabled": "write" in resolved_config.security.tool_group_allowlist,
-                    "connector_write_enabled": "connector"
-                    in resolved_config.security.tool_group_allowlist,
-                    "diagnostics_enabled": resolved_config.security.diagnostics_enabled,
-                    "features": ["dry_run", "audit_logging", "policy_enforcement"],
-                },
-                "tools": [
-                    {
-                        "name": "list_tables",
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": "List tables visible to the configured access context.",
+                    "transport_modes": [
+                        {"name": "http", "status": "available"},
+                        {"name": "sse", "status": "available"},
+                        {"name": "stdio", "status": "available"},
+                    ],
+                    "security": {
+                        "tool_groups": list(resolved_config.security.tool_group_allowlist),
+                        "default_policy": resolved_config.security.policy_preset or "default",
+                        "read_write_enabled": "write"
+                        in resolved_config.security.tool_group_allowlist,
+                        "connector_write_enabled": "connector"
+                        in resolved_config.security.tool_group_allowlist,
+                        "diagnostics_enabled": resolved_config.security.diagnostics_enabled,
+                        "features": ["dry_run", "audit_logging", "policy_enforcement"],
                     },
-                    {
-                        "name": "describe_table",
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": "Describe a table schema and basic metadata.",
+                    "tools": [
+                        {
+                            "name": "list_tables",
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": "List tables visible to the configured access context.",
+                        },
+                        {
+                            "name": "describe_table",
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": "Describe a table schema and basic metadata.",
+                        },
+                        {
+                            "name": "list_table_columns",
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": "Return column metadata for a table.",
+                        },
+                        {
+                            "name": "list_table_indexes",
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": "Return indexes for a table.",
+                        },
+                        {
+                            "name": "sql_query",
+                            "group": "query",
+                            "risk_level": "medium",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "Run a read-only SQL statement and return results. "
+                                "Use argument key 'statement' (aliases: sql, query). "
+                                "Use TOP/SKIP for row limiting; avoid LIMIT/OFFSET/FETCH."
+                            ),
+                        },
+                        {
+                            "name": "sql_query_page",
+                            "group": "query",
+                            "risk_level": "medium",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "Run paged SQL queries with page-size and continuation control. "
+                                "Use argument key 'statement' (aliases: sql, query)."
+                            ),
+                        },
+                        {
+                            "name": "get_usage_contract",
+                            "group": "admin",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "Return canonical argument keys, aliases, transport notes, "
+                                "minimal payload examples, and self-repair guidance for "
+                                "AI client bootstrap."
+                            ),
+                        },
+                        {
+                            "name": "describe_connector_schema",
+                            "group": "admin",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "Return local connector payload schema profiles and known-good "
+                                "examples for supported connector services."
+                            ),
+                        },
+                        {
+                            "name": "validate_connector_payloads",
+                            "group": "admin",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "Preflight validate one or many connector payloads and return "
+                                "deterministic per-item diagnostics without mutating backend state."
+                            ),
+                        },
+                        {
+                            "name": "sql_execute",
+                            "group": "write",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Execute a write statement with confirmation guardrails "
+                                "and optional dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "list_inputs",
+                            "aliases": ["listInputs"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "List input connectors visible to the configured access context."
+                            ),
+                        },
+                        {
+                            "name": "describe_inputs",
+                            "aliases": ["describeInputs"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": "Describe configured input connectors.",
+                        },
+                        {
+                            "name": "list_outputs",
+                            "aliases": ["listOutputs"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "List output connectors visible to the configured access context."
+                            ),
+                        },
+                        {
+                            "name": "describe_outputs",
+                            "aliases": ["describeOutputs"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": "Describe configured output connectors.",
+                        },
+                        {
+                            "name": "create_input",
+                            "aliases": ["createInput"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Create an input connector with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "alter_input",
+                            "aliases": ["alterInput"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Alter an input connector with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "delete_input",
+                            "aliases": ["deleteInput"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Delete an input connector with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "create_output",
+                            "aliases": ["createOutput"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Create an output connector with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "alter_output",
+                            "aliases": ["alterOutput"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Alter an output connector with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "delete_output",
+                            "aliases": ["deleteOutput"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Delete an output connector with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "list_transforms",
+                            "aliases": ["listTransforms"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "List transform connectors visible to the configured "
+                                "access context."
+                            ),
+                        },
+                        {
+                            "name": "describe_transforms",
+                            "aliases": ["describeTransforms"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": "Describe configured transform connectors.",
+                        },
+                        {
+                            "name": "create_transform",
+                            "aliases": ["createTransform"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Create a transform connector with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "list_code_packages",
+                            "aliases": ["listCodePackages"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "List registered code package names for a database/owner."
+                            ),
+                        },
+                        {
+                            "name": "describe_code_package",
+                            "aliases": ["describeCodePackage"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "Describe a registered code package and active revision metadata."
+                            ),
+                        },
+                        {
+                            "name": "register_code_package",
+                            "aliases": ["registerCodePackage"],
+                            "group": "write",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Create or update a code package and maintain codepackage history."
+                            ),
+                        },
+                        {
+                            "name": "alter_transform",
+                            "aliases": ["alterTransform"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Alter a transform connector with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "delete_transform",
+                            "aliases": ["deleteTransform"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Delete a transform connector with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "runtime_status",
+                            "group": "admin",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": "Return runtime configuration flags and policy state.",
+                        },
+                    ],
+                    "metadata": {
+                        "documentation": "https://github.com/faircom/faircom-mcp",
+                        "audit_logging": True,
+                        "observability": resolved_config.observability.enable_metrics,
                     },
-                    {
-                        "name": "list_table_columns",
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": "Return column metadata for a table.",
-                    },
-                    {
-                        "name": "list_table_indexes",
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": "Return indexes for a table.",
-                    },
-                    {
-                        "name": "sql_query",
-                        "group": "query",
-                        "risk_level": "medium",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": (
-                            "Run a read-only SQL statement and return results. "
-                            "Use argument key 'statement' (aliases: sql, query). "
-                            "Use TOP/SKIP for row limiting; avoid LIMIT/OFFSET/FETCH."
-                        ),
-                    },
-                    {
-                        "name": "sql_query_page",
-                        "group": "query",
-                        "risk_level": "medium",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": (
-                            "Run paged SQL queries with page-size and continuation control. "
-                            "Use argument key 'statement' (aliases: sql, query)."
-                        ),
-                    },
-                    {
-                        "name": "get_usage_contract",
-                        "group": "admin",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": (
-                            "Return canonical argument keys, aliases, transport notes, and minimal "
-                            "payload examples for AI client bootstrap and self-repair."
-                        ),
-                    },
-                    {
-                        "name": "describe_connector_schema",
-                        "group": "admin",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": (
-                            "Return local connector payload schema profiles and known-good "
-                            "examples for supported connector services."
-                        ),
-                    },
-                    {
-                        "name": "validate_connector_payloads",
-                        "group": "admin",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": (
-                            "Preflight validate one or many connector payloads and return "
-                            "deterministic per-item diagnostics without mutating backend state."
-                        ),
-                    },
-                    {
-                        "name": "sql_execute",
-                        "group": "write",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Execute a write statement with confirmation guardrails "
-                            "and optional dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "list_inputs",
-                        "aliases": ["listInputs"],
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": (
-                            "List input connectors visible to the configured access context."
-                        ),
-                    },
-                    {
-                        "name": "describe_inputs",
-                        "aliases": ["describeInputs"],
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": "Describe configured input connectors.",
-                    },
-                    {
-                        "name": "list_outputs",
-                        "aliases": ["listOutputs"],
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": (
-                            "List output connectors visible to the configured access context."
-                        ),
-                    },
-                    {
-                        "name": "describe_outputs",
-                        "aliases": ["describeOutputs"],
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": "Describe configured output connectors.",
-                    },
-                    {
-                        "name": "create_input",
-                        "aliases": ["createInput"],
-                        "group": "connector",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Create an input connector with confirmation "
-                            "guardrails and dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "alter_input",
-                        "aliases": ["alterInput"],
-                        "group": "connector",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Alter an input connector with confirmation "
-                            "guardrails and dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "delete_input",
-                        "aliases": ["deleteInput"],
-                        "group": "connector",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Delete an input connector with confirmation "
-                            "guardrails and dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "create_output",
-                        "aliases": ["createOutput"],
-                        "group": "connector",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Create an output connector with confirmation "
-                            "guardrails and dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "alter_output",
-                        "aliases": ["alterOutput"],
-                        "group": "connector",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Alter an output connector with confirmation "
-                            "guardrails and dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "delete_output",
-                        "aliases": ["deleteOutput"],
-                        "group": "connector",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Delete an output connector with confirmation "
-                            "guardrails and dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "list_transforms",
-                        "aliases": ["listTransforms"],
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": (
-                            "List transform connectors visible to the configured access context."
-                        ),
-                    },
-                    {
-                        "name": "describe_transforms",
-                        "aliases": ["describeTransforms"],
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": "Describe configured transform connectors.",
-                    },
-                    {
-                        "name": "create_transform",
-                        "aliases": ["createTransform"],
-                        "group": "connector",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Create a transform connector with confirmation "
-                            "guardrails and dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "list_code_packages",
-                        "aliases": ["listCodePackages"],
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": "List registered code package names for a database/owner.",
-                    },
-                    {
-                        "name": "describe_code_package",
-                        "aliases": ["describeCodePackage"],
-                        "group": "metadata",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": (
-                            "Describe a registered code package and active "
-                            "revision metadata."
-                        ),
-                    },
-                    {
-                        "name": "register_code_package",
-                        "aliases": ["registerCodePackage"],
-                        "group": "write",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Create or update a code package and maintain "
-                            "codepackage history."
-                        ),
-                    },
-                    {
-                        "name": "alter_transform",
-                        "aliases": ["alterTransform"],
-                        "group": "connector",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Alter a transform connector with confirmation "
-                            "guardrails and dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "delete_transform",
-                        "aliases": ["deleteTransform"],
-                        "group": "connector",
-                        "risk_level": "critical",
-                        "idempotent": False,
-                        "stability": "stable",
-                        "description": (
-                            "Delete a transform connector with confirmation "
-                            "guardrails and dry-run preview."
-                        ),
-                    },
-                    {
-                        "name": "runtime_status",
-                        "group": "admin",
-                        "risk_level": "low",
-                        "idempotent": True,
-                        "stability": "stable",
-                        "description": "Return runtime configuration flags and policy state.",
-                    },
-                ],
-                "metadata": {
-                    "documentation": "https://github.com/faircom/faircom-mcp",
-                    "audit_logging": True,
-                    "observability": resolved_config.observability.enable_metrics,
-                },
-            }),
+                }
+            ),
         )
 
     @server.tool(name="observability_metrics")
