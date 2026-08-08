@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import types
 
 import httpx
 import pytest
@@ -65,7 +66,7 @@ def test_create_http_app_honors_transport_and_readiness(monkeypatch: object) -> 
     assert fake_class.last_instance.http_app_calls == ["sse"]
 
     assert _get("/readyz", app).status_code == 503
-    assert _get("/readyz", app).json() == {"status": "not_ready"}
+    assert _get("/readyz", app).json() == {"status": "not_ready", "reason": "not_ready"}
     assert _get("/mcp", app).json() == {"transport": "sse"}
 
 
@@ -129,6 +130,57 @@ def test_create_http_app_http_mode_uses_compat_wrapper(monkeypatch: object) -> N
     assert fake_class.last_instance is not None
     assert fake_class.last_instance.http_app_calls == ["http", "sse"]
     assert _get("/mcp", app).status_code == 200
+
+
+def test_create_http_app_adds_session_recovery_for_expired_session(monkeypatch: object) -> None:
+    _fake_class, server_module = _load_server_module(monkeypatch)
+
+    class _SessionExpiryServer:
+        state = types.SimpleNamespace(runtime_metrics=None)
+
+        def http_app(self, transport: str = "http") -> object:
+            from starlette.applications import Starlette
+            from starlette.responses import JSONResponse
+            from starlette.routing import Route
+
+            _ = transport
+
+            async def _expired_session(_request: object) -> JSONResponse:
+                return JSONResponse(
+                    {
+                        "errorCode": 12031,
+                        "errorMessage": "Session expired",
+                    },
+                    status_code=401,
+                )
+
+            return Starlette(routes=[Route("/mcp", endpoint=_expired_session, methods=["POST"])])
+
+    original_create_server = server_module.create_server
+    monkeypatch.setattr(
+        server_module,
+        "create_server",
+        lambda config, *, readiness_check=None: _SessionExpiryServer(),
+    )
+
+    app = server_module.create_http_app(
+        _config(),
+        readiness_check=lambda: True,
+        transport="http",
+    )
+
+    async def _request() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await client.post("/mcp", headers={"Accept": "application/json"})
+
+    response = asyncio.run(_request())
+
+    assert response.status_code == 401
+    payload = response.json()
+    assert payload["errorCode"] == 12031
+    assert payload["recovery"]["reinitialize_required"] is True
+    assert payload["recovery"]["reason_code"] == "stale_session"
 
 
 def test_create_server_enforces_tool_group_policy(monkeypatch: object) -> None:

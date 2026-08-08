@@ -56,6 +56,31 @@ class _CaptureConnectors:
         }
 
 
+class _AlterInputEventuallyApplies:
+    def __init__(self) -> None:
+        self.describe_calls = 0
+
+    def alter_input(self, payload: dict[str, object]) -> dict[str, object]:
+        _ = payload
+        return {"errorCode": 0, "errorMessage": "", "result": {"ok": True}}
+
+    def describe_inputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+        _ = payload
+        self.describe_calls += 1
+        interval = 5000 if self.describe_calls == 1 else 15000
+        return {
+            "inputs": [
+                {
+                    "inputName": "modbus_input",
+                    "settings": {
+                        "tableName": "modbus_energy_raw",
+                        "dataCollectionIntervalMilliseconds": interval,
+                    },
+                }
+            ]
+        }
+
+
 class _DescribeInputsWithSettings:
     def list_inputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
         return {"inputs": [], "payload": payload}
@@ -74,6 +99,24 @@ class _DescribeInputsWithSettings:
                 }
             ]
         }
+
+
+class _InvalidTransformConnector:
+    def create_input(self, payload: dict[str, object]) -> dict[str, object]:
+        _ = payload
+        return {"errorCode": 0, "errorMessage": "", "result": {"ok": True}}
+
+
+class _ReadinessCheckProbe:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self) -> bool:
+        import time
+
+        self.calls += 1
+        time.sleep(2.5)
+        return True
 
 
 class _CaptureCodePackageSql(BasicFakeSQL):
@@ -165,6 +208,38 @@ def test_compatibility_matrix_connector_confirmation_required(monkeypatch: objec
         server.tools["create_input"](payload={"connectorName": "demo_input"})
 
     assert exc.value.details["reason_code"] == "missing_write_confirmation"
+
+
+def test_compatibility_matrix_connector_validation_rejection_is_logged(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=_CaptureConnectors(),
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    with pytest.raises(ValidationFailure):
+        server.tools["create_input"](
+            payload={"serviceName": "modbus"},
+            confirm_write=True,
+        )
+
+    audit = server.tools["observability_audit"]()["events"]
+    assert any(
+        event["type"] == "connector_write_attempt" and event["details"]["tool"] == "create_input"
+        for event in audit
+    )
+    assert any(
+        event["type"] == "connector_write_result"
+        and event["details"]["tool"] == "create_input"
+        and event["details"]["outcome"] == "rejected"
+        for event in audit
+    )
 
 
 def test_compatibility_matrix_connector_write_nonzero_error_code_raises(
@@ -677,7 +752,22 @@ def test_compatibility_matrix_manage_service_requires_control_field(
         )
 
     assert exc.value.details["tool_name"] == "manage_service"
-    assert "requires at least one service control field" in exc.value.message
+    assert "contains unsupported fields" in exc.value.message
+
+
+def test_compatibility_matrix_validate_connector_payloads_supports_manage_service_alias(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="manage_service",
+        payload={"serviceName": "modbus", "enabled": True},
+    )
+
+    assert result["summary"]["all_valid"] is True
+    assert result["results"][0]["action"] == "manageService"
+    assert result["results"][0]["forwarded_payload"]["enabled"] is True
 
 
 def test_compatibility_matrix_validate_connector_payloads_supports_manage_service(
@@ -693,6 +783,73 @@ def test_compatibility_matrix_validate_connector_payloads_supports_manage_servic
     assert result["summary"]["all_valid"] is True
     assert result["results"][0]["status"] == "valid"
     assert result["results"][0]["forwarded_payload"]["enabled"] is True
+
+
+def test_compatibility_matrix_alter_input_polls_until_commit_visible(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+    connector_adapter = _AlterInputEventuallyApplies()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["alter_input"](
+        payload={
+            "connectorName": "modbus_input",
+            "serviceName": "modbus",
+            "tableName": "modbus_energy_raw",
+            "modbusProtocol": "TCP",
+            "modbusServer": "127.0.0.1",
+            "modbusServerPort": 502,
+            "dataCollectionIntervalMilliseconds": 15000,
+            "propertyMapList": [
+                {
+                    "propertyName": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                }
+            ],
+        },
+        confirm_write=True,
+    )
+
+    assert result["mutation_applied"] is True
+    assert result["mutation_verification"]["status"] == "verified"
+    assert result["mutation_verification"]["attempts"] >= 2
+
+
+def test_compatibility_matrix_observability_health_times_out_on_slow_readiness(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    def _slow_readiness_check() -> bool:
+        import time
+
+        time.sleep(2.5)
+        return True
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+    ):
+        server = server_module.create_server(
+            _config(),
+            client_factory=lambda _config: object(),
+            readiness_check=_slow_readiness_check,
+        )
+
+    result = server.tools["observability_health"]()
+
+    assert result["status"] == "degraded"
+    assert result["details"]["readiness"]["status"] == "timeout"
 
 
 def test_compatibility_matrix_validate_connector_payloads_rejects_invalid_manage_service(

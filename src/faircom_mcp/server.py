@@ -5,6 +5,7 @@ import html
 import json
 import logging
 import re
+import threading
 import time
 import types
 from collections.abc import AsyncIterator, Callable
@@ -541,6 +542,7 @@ def create_server(
         action: str,
         target: str | None,
         writer: Callable[[], object],
+        post_commit_verifier: Callable[[object], None] | None = None,
     ) -> object:
         def _coerce_error_code(value: object) -> int | None:
             if isinstance(value, bool):
@@ -557,62 +559,104 @@ def create_server(
                     return None
             return None
 
+        def _record_connector_write_result(
+            outcome: str,
+            *,
+            extra: dict[str, object] | None = None,
+        ) -> None:
+            details: dict[str, object] = {
+                "tool": tool_name,
+                "action": action,
+                "target": target,
+                "outcome": outcome,
+            }
+            if extra:
+                details.update(extra)
+            audit_log.record(
+                event_type="connector_write_result",
+                details=details,
+            )
+
         try:
             result = writer()
         except FaircomError as exc:
-            audit_log.record(
-                event_type="connector_write_result",
-                details={
-                    "tool": tool_name,
-                    "action": action,
-                    "target": target,
-                    "outcome": "failed",
+            _record_connector_write_result(
+                "failed",
+                extra={
                     "error_code": str(exc.code),
                     "error_message": exc.message,
                 },
             )
             raise
         except Exception as exc:
-            audit_log.record(
-                event_type="connector_write_result",
-                details={
-                    "tool": tool_name,
-                    "action": action,
-                    "target": target,
-                    "outcome": "failed",
+            _record_connector_write_result(
+                "failed",
+                extra={
                     "error_code": "unexpected_exception",
                     "error_message": str(exc),
                 },
             )
             raise
 
-        if isinstance(result, dict):
-            error_code = _coerce_error_code(result.get("errorCode"))
-            if error_code is not None and error_code != 0:
-                error_message = result.get("errorMessage")
-                raise UpstreamAPIError(
-                    "FairCom connector action returned an application error",
-                    details={
-                        "errorCode": error_code,
-                        "errorMessage": error_message,
-                        "request_action": action,
-                        "tool": tool_name,
-                        "target": target,
-                        "response": result,
-                    },
-                    retryable=False,
-                )
+        try:
+            if isinstance(result, dict):
+                error_code = _coerce_error_code(result.get("errorCode"))
+                if error_code is not None and error_code != 0:
+                    raise UpstreamAPIError(
+                        "FairCom connector action returned an application error",
+                        details={
+                            "errorCode": error_code,
+                            "errorMessage": result.get("errorMessage"),
+                            "request_action": action,
+                            "tool": tool_name,
+                            "target": target,
+                            "response": result,
+                        },
+                        retryable=False,
+                    )
 
+            if post_commit_verifier is not None:
+                post_commit_verifier(result)
+        except FaircomError as exc:
+            _record_connector_write_result(
+                "failed",
+                extra={
+                    "error_code": str(exc.code),
+                    "error_message": exc.message,
+                },
+            )
+            raise
+        except Exception as exc:
+            _record_connector_write_result(
+                "failed",
+                extra={
+                    "error_code": "unexpected_exception",
+                    "error_message": str(exc),
+                },
+            )
+            raise
+
+        _record_connector_write_result("success")
+        return result
+
+    def _record_connector_validation_rejection(
+        *,
+        tool_name: str,
+        action: str,
+        payload: dict[str, object] | None,
+        exc: ValidationFailure,
+    ) -> None:
         audit_log.record(
             event_type="connector_write_result",
             details={
                 "tool": tool_name,
                 "action": action,
-                "target": target,
-                "outcome": "success",
+                "target": _connector_target_name(payload),
+                "outcome": "rejected",
+                "reason_code": exc.details.get("reason_code", "validation_error"),
+                "error_message": exc.message,
             },
         )
-        return result
 
     def _execute_code_package_write(
         *,
@@ -770,8 +814,6 @@ def create_server(
             action=action,
             payload=normalized_payload,
         )
-        validation_warnings = cast(list[str], validation.get("warnings", []))
-
         schema_validated = validation["status"] == "validated"
         schema_outcome = "schema_valid" if schema_validated else "unvalidated"
         forwarded_payload = transform_connector_request(action, normalized_payload)
@@ -1859,6 +1901,85 @@ def create_server(
             "pause",
             "resume",
         }
+        allowed_fields = {"serviceName", *control_fields}
+        unexpected_fields = sorted(
+            key
+            for key in normalized_payload.keys()
+            if isinstance(key, str) and key not in allowed_fields
+        )
+        if unexpected_fields:
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="manage_service payload contains unsupported fields",
+                expected_args={
+                    "payload": (
+                        "serviceName plus one or more control fields: "
+                        "enabled/active/running/state/status/action/start/stop/restart/pause/resume"
+                    )
+                },
+                received_args={
+                    "payload": normalized_payload,
+                    "unsupported_fields": unexpected_fields,
+                },
+                suggested_fix=(
+                    "Remove unsupported fields and retry with documented manage_service keys only."
+                ),
+                example_payload={
+                    "name": "manage_service",
+                    "arguments": {
+                        "payload": {"serviceName": "modbus", "action": "start"},
+                    },
+                },
+            )
+
+        command_values = {
+            "start",
+            "stop",
+            "restart",
+            "pause",
+            "resume",
+            "enable",
+            "disable",
+            "active",
+            "inactive",
+            "running",
+            "stopped",
+        }
+        for command_field in ("action", "state", "status"):
+            raw_value = normalized_payload.get(command_field)
+            if raw_value is None:
+                continue
+            if not isinstance(raw_value, str) or not raw_value.strip():
+                raise _validation_failure(
+                    tool_name=tool_name,
+                    message=f"{command_field} must be a non-empty string when provided",
+                    expected_args={f"payload.{command_field}": f"one of {sorted(command_values)}"},
+                    received_args={"payload": normalized_payload},
+                    suggested_fix=f"Set {command_field} to a supported command value.",
+                    example_payload={
+                        "name": "manage_service",
+                        "arguments": {
+                            "payload": {"serviceName": "modbus", command_field: "start"},
+                        },
+                    },
+                )
+            normalized_value = raw_value.strip().lower()
+            normalized_payload[command_field] = normalized_value
+            if normalized_value not in command_values:
+                raise _validation_failure(
+                    tool_name=tool_name,
+                    message=f"Unsupported {command_field} value",
+                    expected_args={f"payload.{command_field}": f"one of {sorted(command_values)}"},
+                    received_args={"payload": normalized_payload},
+                    suggested_fix=f"Use one of the documented manage_service command values for {command_field}.",
+                    example_payload={
+                        "name": "manage_service",
+                        "arguments": {
+                            "payload": {"serviceName": "modbus", command_field: "start"},
+                        },
+                    },
+                )
+
         has_control_field = any(
             key in normalized_payload and normalized_payload.get(key) is not None
             for key in control_fields
@@ -2003,17 +2124,51 @@ def create_server(
 
     @server.custom_route("/ready", methods=["GET"])
     async def ready(_request: Request) -> JSONResponse:
-        is_ready = bool(readiness_check() if readiness_check is not None else True)
+        is_ready = True
+        reason = "ok"
+        if readiness_check is not None:
+            result_holder: dict[str, bool] = {"value": True}
+
+            def _run_readiness_check() -> None:
+                result_holder["value"] = bool(readiness_check())
+
+            thread = threading.Thread(target=_run_readiness_check, daemon=True)
+            thread.start()
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                is_ready = False
+                reason = "timeout"
+            else:
+                is_ready = result_holder["value"]
+                reason = "ok" if is_ready else "not_ready"
+
         status_code = 200 if is_ready else 503
         status = "ready" if is_ready else "not_ready"
-        return JSONResponse({"status": status}, status_code=status_code)
+        return JSONResponse({"status": status, "reason": reason}, status_code=status_code)
 
     @server.custom_route("/readyz", methods=["GET"])
     async def readyz(_request: Request) -> JSONResponse:
-        is_ready = bool(readiness_check() if readiness_check is not None else True)
+        is_ready = True
+        reason = "ok"
+        if readiness_check is not None:
+            result_holder: dict[str, bool] = {"value": True}
+
+            def _run_readiness_check() -> None:
+                result_holder["value"] = bool(readiness_check())
+
+            thread = threading.Thread(target=_run_readiness_check, daemon=True)
+            thread.start()
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                is_ready = False
+                reason = "timeout"
+            else:
+                is_ready = result_holder["value"]
+                reason = "ok" if is_ready else "not_ready"
+
         status_code = 200 if is_ready else 503
         status = "ready" if is_ready else "not_ready"
-        return JSONResponse({"status": status}, status_code=status_code)
+        return JSONResponse({"status": status, "reason": reason}, status_code=status_code)
 
     if resolved_config.observability.enable_metrics:
 
@@ -2369,35 +2524,44 @@ def create_server(
                     payload=payload,
                 ),
             )
-        resolved_payload = _require_connector_payload(
-            tool_name="create_input",
-            payload=payload,
-            action="createInput",
-        )
-        if not confirm_write:
-            raise _validation_failure(
+        try:
+            resolved_payload = _require_connector_payload(
                 tool_name="create_input",
-                message="create_input requires confirm_write=True",
-                expected_args={
-                    "payload": "object (required)",
-                    "confirm_write": "true for non-dry-run changes",
-                    "dry_run": "true to preview change",
-                },
-                received_args={
-                    "payload": resolved_payload,
-                    "confirm_write": confirm_write,
-                    "dry_run": dry_run,
-                    "confirm_write_required": True,
-                },
-                suggested_fix=(
-                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
-                ),
-                example_payload={
-                    "name": "create_input",
-                    "arguments": {"payload": {"connectorName": "demo", "type": "input"}},
-                },
-                reason_code="missing_write_confirmation",
+                payload=payload,
+                action="createInput",
             )
+            if not confirm_write:
+                raise _validation_failure(
+                    tool_name="create_input",
+                    message="create_input requires confirm_write=True",
+                    expected_args={
+                        "payload": "object (required)",
+                        "confirm_write": "true for non-dry-run changes",
+                        "dry_run": "true to preview change",
+                    },
+                    received_args={
+                        "payload": resolved_payload,
+                        "confirm_write": confirm_write,
+                        "dry_run": dry_run,
+                        "confirm_write_required": True,
+                    },
+                    suggested_fix=(
+                        "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                    ),
+                    example_payload={
+                        "name": "create_input",
+                        "arguments": {"payload": {"connectorName": "demo", "type": "input"}},
+                    },
+                    reason_code="missing_write_confirmation",
+                )
+        except ValidationFailure as exc:
+            _record_connector_validation_rejection(
+                tool_name="create_input",
+                action="createInput",
+                payload=payload,
+                exc=exc,
+            )
+            raise
         result = _execute_connector_write(
             tool_name="create_input",
             action="createInput",
@@ -2470,6 +2634,8 @@ def create_server(
             return _missing_value
 
         def _verify_alter_input_mutation(resolved: dict[str, object]) -> dict[str, object]:
+            verify_timeout_seconds = 3.0
+            verify_poll_interval_seconds = 0.25
             input_name = resolved.get("inputName")
             if not isinstance(input_name, str) or not input_name.strip():
                 connector_name = resolved.get("connectorName")
@@ -2500,77 +2666,90 @@ def create_server(
                     "message": "No verifiable mutable fields were present in the payload",
                 }
 
-            described = connector_adapter.describe_inputs({"inputName": input_name})
-            records = _extract_input_records(described)
-            matching_record: dict[str, object] | None = None
-            for record in records:
-                candidate = record.get("inputName")
-                if isinstance(candidate, str) and candidate.strip() == input_name:
-                    matching_record = record
+            deadline = time.monotonic() + verify_timeout_seconds
+            attempt_count = 0
+            latest_mismatches: list[dict[str, object]] = []
+            latest_record: dict[str, object] | None = None
+            latest_reason = "input_not_found"
+
+            while True:
+                attempt_count += 1
+                described = connector_adapter.describe_inputs({"inputName": input_name})
+                records = _extract_input_records(described)
+                matching_record: dict[str, object] | None = None
+                for record in records:
+                    candidate = record.get("inputName")
+                    if isinstance(candidate, str) and candidate.strip() == input_name:
+                        matching_record = record
+                        break
+                if matching_record is None and records:
+                    matching_record = records[0]
+
+                if matching_record is not None:
+                    latest_record = matching_record
+                    mismatches: list[dict[str, object]] = []
+                    for key in verify_keys:
+                        expected = resolved.get(key)
+                        observed = _extract_observed_value(matching_record, key)
+                        if observed is _missing_value:
+                            mismatches.append(
+                                {
+                                    "field": key,
+                                    "expected": expected,
+                                    "observed": "<missing>",
+                                    "reason": "field_not_present_in_describe_inputs",
+                                }
+                            )
+                            continue
+
+                        expected_normalized = _coerce_comparable(expected)
+                        observed_normalized = _coerce_comparable(observed)
+                        if observed_normalized != expected_normalized:
+                            mismatches.append(
+                                {
+                                    "field": key,
+                                    "expected": expected,
+                                    "observed": observed,
+                                    "expected_normalized": expected_normalized,
+                                    "observed_normalized": observed_normalized,
+                                }
+                            )
+
+                    if not mismatches:
+                        return {
+                            "status": "verified",
+                            "inputName": input_name,
+                            "verified_fields": verify_keys,
+                            "attempts": attempt_count,
+                            "poll_timeout_seconds": verify_timeout_seconds,
+                        }
+
+                    latest_reason = "mutation_not_applied"
+                    latest_mismatches = mismatches
+
+                if time.monotonic() >= deadline:
                     break
-            if matching_record is None and records:
-                matching_record = records[0]
+                time.sleep(verify_poll_interval_seconds)
 
-            if matching_record is None:
-                return {
-                    "status": "skipped",
-                    "reason": "input_not_found",
-                    "message": "Input could not be read back for verification",
+            raise UpstreamAPIError(
+                "alter_input was acknowledged upstream but requested changes were not observed",
+                details={
+                    "errorCode": 0,
+                    "request_action": "alterInput",
                     "inputName": input_name,
-                }
-
-            mismatches: list[dict[str, object]] = []
-            for key in verify_keys:
-                expected = resolved.get(key)
-                observed = _extract_observed_value(matching_record, key)
-                if observed is _missing_value:
-                    mismatches.append(
-                        {
-                            "field": key,
-                            "expected": expected,
-                            "observed": "<missing>",
-                            "reason": "field_not_present_in_describe_inputs",
-                        }
-                    )
-                    continue
-
-                expected_normalized = _coerce_comparable(expected)
-                observed_normalized = _coerce_comparable(observed)
-                if observed_normalized != expected_normalized:
-                    mismatches.append(
-                        {
-                            "field": key,
-                            "expected": expected,
-                            "observed": observed,
-                            "expected_normalized": expected_normalized,
-                            "observed_normalized": observed_normalized,
-                        }
-                    )
-
-            if mismatches:
-                raise UpstreamAPIError(
-                    "alter_input was acknowledged upstream but requested changes were not observed",
-                    details={
-                        "errorCode": 0,
-                        "request_action": "alterInput",
-                        "inputName": input_name,
-                        "reason_code": "mutation_not_applied",
-                        "mismatches": mismatches,
-                        "verification_source": matching_record,
-                    },
-                    retryable=False,
-                    hint=(
-                        "The write call returned success but read-after-write verification "
-                        "did not match. Check service runtime state and connector mutability, "
-                        "then retry with a full payload."
-                    ),
-                )
-
-            return {
-                "status": "verified",
-                "inputName": input_name,
-                "verified_fields": verify_keys,
-            }
+                    "reason_code": latest_reason,
+                    "mismatches": latest_mismatches,
+                    "verification_source": latest_record,
+                    "verification_attempts": attempt_count,
+                    "verification_timeout_seconds": verify_timeout_seconds,
+                },
+                retryable=False,
+                hint=(
+                    "The write call returned success but read-after-write verification did not "
+                    "converge before timeout. Check service runtime state and connector mutability, "
+                    "then retry with a full payload."
+                ),
+            )
 
         audit_log.record(
             event_type="connector_write_attempt",
@@ -2592,35 +2771,51 @@ def create_server(
                     payload=payload,
                 ),
             )
-        resolved_payload = _require_connector_payload(
-            tool_name="alter_input",
-            payload=payload,
-            action="alterInput",
-        )
-        if not confirm_write:
-            raise _validation_failure(
+        try:
+            resolved_payload = _require_connector_payload(
                 tool_name="alter_input",
-                message="alter_input requires confirm_write=True",
-                expected_args={
-                    "payload": "object (required)",
-                    "confirm_write": "true for non-dry-run changes",
-                    "dry_run": "true to preview change",
-                },
-                received_args={
-                    "payload": resolved_payload,
-                    "confirm_write": confirm_write,
-                    "dry_run": dry_run,
-                    "confirm_write_required": True,
-                },
-                suggested_fix=(
-                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
-                ),
-                example_payload={
-                    "name": "alter_input",
-                    "arguments": {"payload": {"connectorName": "demo", "type": "input"}},
-                },
-                reason_code="missing_write_confirmation",
+                payload=payload,
+                action="alterInput",
             )
+            if not confirm_write:
+                raise _validation_failure(
+                    tool_name="alter_input",
+                    message="alter_input requires confirm_write=True",
+                    expected_args={
+                        "payload": "object (required)",
+                        "confirm_write": "true for non-dry-run changes",
+                        "dry_run": "true to preview change",
+                    },
+                    received_args={
+                        "payload": resolved_payload,
+                        "confirm_write": confirm_write,
+                        "dry_run": dry_run,
+                        "confirm_write_required": True,
+                    },
+                    suggested_fix=(
+                        "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                    ),
+                    example_payload={
+                        "name": "alter_input",
+                        "arguments": {"payload": {"connectorName": "demo", "type": "input"}},
+                    },
+                    reason_code="missing_write_confirmation",
+                )
+        except ValidationFailure as exc:
+            _record_connector_validation_rejection(
+                tool_name="alter_input",
+                action="alterInput",
+                payload=payload,
+                exc=exc,
+            )
+            raise
+
+        verification: dict[str, object] | None = None
+
+        def _post_commit_verify(_result: object) -> None:
+            nonlocal verification
+            verification = _verify_alter_input_mutation(resolved_payload)
+
         try:
             result = _execute_connector_write(
                 tool_name="alter_input",
@@ -2631,6 +2826,7 @@ def create_server(
                     "connector",
                     lambda: connector_adapter.alter_input(resolved_payload),
                 ),
+                post_commit_verifier=_post_commit_verify,
             )
         except FaircomError as exc:
             details = exc.details if isinstance(exc.details, dict) else {}
@@ -2676,13 +2872,14 @@ def create_server(
                     exc.details = {"recovery": guidance}
             raise
         if isinstance(result, dict):
-            verification = _verify_alter_input_mutation(resolved_payload)
             enriched = dict(result)
             enriched.update(
                 {
                     "dry_run_applied": False,
                     "confirm_write_required": True,
-                    "mutation_applied": verification.get("status") == "verified",
+                    "mutation_applied": bool(
+                        verification and verification.get("status") == "verified"
+                    ),
                     "mutation_verification": verification,
                 }
             )
@@ -3055,35 +3252,44 @@ def create_server(
                     payload=payload,
                 ),
             )
-        resolved_payload = _require_connector_payload(
-            tool_name="create_transform",
-            payload=payload,
-            action="createTransform",
-        )
-        if not confirm_write:
-            raise _validation_failure(
+        try:
+            resolved_payload = _require_connector_payload(
                 tool_name="create_transform",
-                message="create_transform requires confirm_write=True",
-                expected_args={
-                    "payload": "object (required)",
-                    "confirm_write": "true for non-dry-run changes",
-                    "dry_run": "true to preview change",
-                },
-                received_args={
-                    "payload": resolved_payload,
-                    "confirm_write": confirm_write,
-                    "dry_run": dry_run,
-                    "confirm_write_required": True,
-                },
-                suggested_fix=(
-                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
-                ),
-                example_payload={
-                    "name": "create_transform",
-                    "arguments": {"payload": {"connectorName": "demo", "type": "transform"}},
-                },
-                reason_code="missing_write_confirmation",
+                payload=payload,
+                action="createTransform",
             )
+            if not confirm_write:
+                raise _validation_failure(
+                    tool_name="create_transform",
+                    message="create_transform requires confirm_write=True",
+                    expected_args={
+                        "payload": "object (required)",
+                        "confirm_write": "true for non-dry-run changes",
+                        "dry_run": "true to preview change",
+                    },
+                    received_args={
+                        "payload": resolved_payload,
+                        "confirm_write": confirm_write,
+                        "dry_run": dry_run,
+                        "confirm_write_required": True,
+                    },
+                    suggested_fix=(
+                        "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                    ),
+                    example_payload={
+                        "name": "create_transform",
+                        "arguments": {"payload": {"connectorName": "demo", "type": "transform"}},
+                    },
+                    reason_code="missing_write_confirmation",
+                )
+        except ValidationFailure as exc:
+            _record_connector_validation_rejection(
+                tool_name="create_transform",
+                action="createTransform",
+                payload=payload,
+                exc=exc,
+            )
+            raise
         result = _execute_connector_write(
             tool_name="create_transform",
             action="createTransform",
@@ -3662,6 +3868,13 @@ def create_server(
         payload: dict[str, object] | None = None,
         payloads: list[dict[str, object]] | None = None,
     ) -> object:
+        action_aliases = {
+            "manage_service": "manageService",
+            "manage-service": "manageService",
+            "manageservice": "manageService",
+        }
+        normalized_action = action_aliases.get(action, action)
+
         allowed_actions = {
             "createInput",
             "alterInput",
@@ -3674,7 +3887,7 @@ def create_server(
             "deleteTransform",
             "manageService",
         }
-        if action not in allowed_actions:
+        if normalized_action not in allowed_actions:
             raise _validation_failure(
                 tool_name="validate_connector_payloads",
                 message="Unsupported action for preflight",
@@ -3901,7 +4114,7 @@ def create_server(
                     continue
 
                 try:
-                    if action == "manageService":
+                    if normalized_action == "manageService":
                         normalized_payload = _validate_manage_service_payload(
                             tool_name="validate_connector_payloads",
                             payload=item,
@@ -3910,7 +4123,7 @@ def create_server(
                         normalized_payload = _require_connector_payload(
                             tool_name="validate_connector_payloads",
                             payload=item,
-                            action=action,
+                            action=normalized_action,
                         )
                 except ValidationFailure as exc:
                     invalid_count += 1
@@ -3934,7 +4147,7 @@ def create_server(
                 valid_count += 1
                 validation: dict[str, object]
                 forwarded_payload: dict[str, object] | None
-                if action == "manageService":
+                if normalized_action == "manageService":
                     validation = {
                         "service_name": normalized_payload.get("serviceName"),
                         "warnings": [],
@@ -3943,15 +4156,18 @@ def create_server(
                 else:
                     validation = _validate_connector_schema(
                         tool_name="validate_connector_payloads",
-                        action=action,
+                        action=normalized_action,
                         payload=normalized_payload,
                     )
-                    forwarded_payload = transform_connector_request(action, normalized_payload)
+                    forwarded_payload = transform_connector_request(
+                        normalized_action,
+                        normalized_payload,
+                    )
                 results.append(
                     {
                         "index": index,
                         "status": "valid",
-                        "action": action,
+                        "action": normalized_action,
                         "schema_service": validation["service_name"],
                         "warnings": validation.get("warnings", []),
                         "normalized_payload": normalized_payload,
@@ -3962,7 +4178,7 @@ def create_server(
 
             return {
                 "mode": "preflight",
-                "action": action,
+                "action": normalized_action,
                 "summary": {
                     "total": len(items),
                     "valid": valid_count,
@@ -4159,7 +4375,7 @@ def create_server(
             # transform creation and can be attributed to this write action.
             if language.strip().lower() == "javascript":
                 try:
-                    import esprima  # type: ignore[import-untyped]
+                    import esprima  # type: ignore[import-not-found, import-untyped]
 
                     esprima.parseScript(normalized_code)
                 except Exception as exc:
@@ -4859,16 +5075,42 @@ def create_server(
 
     @server.tool(name="observability_health")
     def observability_health() -> object:
+        readiness_state = {"configured": readiness_check is not None, "status": "not_configured"}
+        if readiness_check is not None:
+            ready_holder: dict[str, bool] = {"value": False}
+
+            def _run_readiness_check() -> None:
+                ready_holder["value"] = bool(readiness_check())
+
+            thread = threading.Thread(target=_run_readiness_check, daemon=True)
+            thread.start()
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                readiness_state = {
+                    "configured": True,
+                    "status": "timeout",
+                    "timeout_seconds": 2.0,
+                }
+            elif ready_holder["value"]:
+                readiness_state = {"configured": True, "status": "ready"}
+            else:
+                readiness_state = {"configured": True, "status": "not_ready"}
+
+        overall_status = "ok"
+        if readiness_state.get("configured") and readiness_state.get("status") != "ready":
+            overall_status = "degraded"
+
         return _run_tool(
             "observability_health",
             "admin",
             lambda: {
                 "service": "faircom-mcp",
-                "status": "ok",
+                "status": overall_status,
                 "details": {
                     "metrics_enabled": resolved_config.observability.enable_metrics,
                     "tracing_enabled": resolved_config.observability.enable_tracing,
                     "diagnostics_enabled": resolved_config.security.diagnostics_enabled,
+                    "readiness": readiness_state,
                 },
             },
         )
