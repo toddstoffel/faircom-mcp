@@ -156,7 +156,6 @@ def test_create_http_app_adds_session_recovery_for_expired_session(monkeypatch: 
 
             return Starlette(routes=[Route("/mcp", endpoint=_expired_session, methods=["POST"])])
 
-    original_create_server = server_module.create_server
     monkeypatch.setattr(
         server_module,
         "create_server",

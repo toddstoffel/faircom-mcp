@@ -1904,7 +1904,7 @@ def create_server(
         allowed_fields = {"serviceName", *control_fields}
         unexpected_fields = sorted(
             key
-            for key in normalized_payload.keys()
+            for key in normalized_payload
             if isinstance(key, str) and key not in allowed_fields
         )
         if unexpected_fields:
@@ -1971,7 +1971,10 @@ def create_server(
                     message=f"Unsupported {command_field} value",
                     expected_args={f"payload.{command_field}": f"one of {sorted(command_values)}"},
                     received_args={"payload": normalized_payload},
-                    suggested_fix=f"Use one of the documented manage_service command values for {command_field}.",
+                    suggested_fix=(
+                        "Use one of the documented manage_service command values "
+                        f"for {command_field}."
+                    ),
                     example_payload={
                         "name": "manage_service",
                         "arguments": {
@@ -2746,7 +2749,8 @@ def create_server(
                 retryable=False,
                 hint=(
                     "The write call returned success but read-after-write verification did not "
-                    "converge before timeout. Check service runtime state and connector mutability, "
+                    "converge before timeout. Check service runtime state and connector "
+                    "mutability, "
                     "then retry with a full payload."
                 ),
             )
