@@ -412,8 +412,8 @@ def create_server(
         return None
 
     def _collect_service_records(value: object) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
         if isinstance(value, list):
-            records: list[dict[str, object]] = []
             for item in value:
                 if isinstance(item, dict):
                     records.append(item)
@@ -422,7 +422,6 @@ def create_server(
                     records.extend(_collect_service_records(item))
             return records
         if isinstance(value, dict):
-            records: list[dict[str, object]] = []
             direct_name = _extract_service_name(value)
             if direct_name is not None:
                 records.append(value)
