@@ -867,8 +867,7 @@ def create_server(
                                 "json_pointer": "/payload",
                                 "reason": "required",
                                 "message": (
-                                    "deleteTransform requires transformName "
-                                    "or connectorName"
+                                    "deleteTransform requires transformName or connectorName"
                                 ),
                             }
                         ],
