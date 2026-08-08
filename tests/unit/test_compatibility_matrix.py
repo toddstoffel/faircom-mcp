@@ -613,9 +613,7 @@ def test_compatibility_matrix_alter_input_detects_non_applied_mutation(
             _ = payload
             return {"errorCode": 0, "errorMessage": "", "result": {"ok": True}}
 
-        def describe_inputs(
-            self, payload: dict[str, object] | None = None
-        ) -> dict[str, object]:
+        def describe_inputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
             _ = payload
             return {
                 "inputs": [
@@ -658,7 +656,10 @@ def test_compatibility_matrix_alter_input_detects_non_applied_mutation(
         )
 
     assert exc.value.details["reason_code"] == "mutation_not_applied"
-    assert any(item["field"] == "dataCollectionIntervalMilliseconds" for item in exc.value.details["mismatches"])
+    assert any(
+        item["field"] == "dataCollectionIntervalMilliseconds"
+        for item in exc.value.details["mismatches"]
+    )
 
 
 def test_compatibility_matrix_manage_service_requires_control_field(

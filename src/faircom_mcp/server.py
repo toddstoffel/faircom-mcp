@@ -1775,8 +1775,7 @@ def create_server(
                 issue_reason = first_issue.get("reason")
                 issue_text = first_issue.get("message")
                 validation_message = (
-                    "connector payload failed local schema validation: "
-                    f"{issue_path or 'payload'}"
+                    f"connector payload failed local schema validation: {issue_path or 'payload'}"
                 )
                 if isinstance(issue_reason, str) and issue_reason:
                     validation_message += f" ({issue_reason})"
@@ -2439,9 +2438,7 @@ def create_server(
             for key in ("inputs", "results", "data", "items"):
                 nested = value.get(key)
                 if isinstance(nested, list):
-                    direct_records.extend(
-                        entry for entry in nested if isinstance(entry, dict)
-                    )
+                    direct_records.extend(entry for entry in nested if isinstance(entry, dict))
             if direct_records:
                 return direct_records
             return [value]
