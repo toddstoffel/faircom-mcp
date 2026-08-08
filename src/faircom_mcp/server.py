@@ -25,7 +25,7 @@ from faircom_mcp.api.dialect import detect_unsupported_features, normalize_selec
 from faircom_mcp.api.sql import SQLAdapter
 from faircom_mcp.api.tables import TableAdapter
 from faircom_mcp.config import AppConfig, load_config
-from faircom_mcp.errors import FaircomError, ValidationFailure
+from faircom_mcp.errors import FaircomError, UpstreamAPIError, ValidationFailure
 from faircom_mcp.observability import AuditLog, RuntimeMetrics, build_tracer, maybe_span
 
 _MODBUS_DATA_ACCESS_ENUM = [
@@ -542,6 +542,21 @@ def create_server(
         target: str | None,
         writer: Callable[[], object],
     ) -> object:
+        def _coerce_error_code(value: object) -> int | None:
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                raw = value.strip()
+                if not raw:
+                    return None
+                try:
+                    return int(raw)
+                except ValueError:
+                    return None
+            return None
+
         try:
             result = writer()
         except FaircomError as exc:
@@ -570,6 +585,23 @@ def create_server(
                 },
             )
             raise
+
+        if isinstance(result, dict):
+            error_code = _coerce_error_code(result.get("errorCode"))
+            if error_code is not None and error_code != 0:
+                error_message = result.get("errorMessage")
+                raise UpstreamAPIError(
+                    "FairCom connector action returned an application error",
+                    details={
+                        "errorCode": error_code,
+                        "errorMessage": error_message,
+                        "request_action": action,
+                        "tool": tool_name,
+                        "target": target,
+                        "response": result,
+                    },
+                    retryable=False,
+                )
 
         audit_log.record(
             event_type="connector_write_result",
@@ -1731,9 +1763,29 @@ def create_server(
             payload=normalized_payload,
         )
         if validation["status"] == "invalid":
+            first_issue: dict[str, object] | None = None
+            issues = validation.get("errors")
+            if isinstance(issues, list) and issues and isinstance(issues[0], dict):
+                first_issue = cast(dict[str, object], issues[0])
+
+            if first_issue is None:
+                validation_message = "connector payload failed local schema validation"
+            else:
+                issue_path = first_issue.get("path")
+                issue_reason = first_issue.get("reason")
+                issue_text = first_issue.get("message")
+                validation_message = (
+                    "connector payload failed local schema validation: "
+                    f"{issue_path or 'payload'}"
+                )
+                if isinstance(issue_reason, str) and issue_reason:
+                    validation_message += f" ({issue_reason})"
+                if isinstance(issue_text, str) and issue_text:
+                    validation_message += f" - {issue_text}"
+
             raise _validation_failure(
                 tool_name=tool_name,
-                message="connector payload failed local schema validation",
+                message=validation_message,
                 expected_args={
                     "payload": "object (required)",
                     "payload.serviceName": "string (recommended for schema validation)",
@@ -1752,6 +1804,86 @@ def create_server(
                 example_payload={
                     "name": "describe_connector_schema",
                     "arguments": {"service_name": str(validation["service_name"] or "modbus")},
+                },
+            )
+
+        return normalized_payload
+
+    def _validate_manage_service_payload(
+        *,
+        tool_name: str,
+        payload: dict[str, object] | None,
+    ) -> dict[str, object]:
+        if payload is None or not payload:
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="payload is required",
+                expected_args={"payload": "object (required)"},
+                received_args={"payload": payload},
+                suggested_fix="Provide a non-empty manageService payload.",
+                example_payload={
+                    "name": "manage_service",
+                    "arguments": {
+                        "payload": {"serviceName": "modbus", "enabled": True},
+                    },
+                },
+            )
+
+        normalized_payload = dict(payload)
+        service_name = normalized_payload.get("serviceName")
+        if not isinstance(service_name, str) or not service_name.strip():
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="serviceName is required in manage_service payload",
+                expected_args={"payload.serviceName": "string (required)"},
+                received_args={"payload": normalized_payload},
+                suggested_fix="Provide payload.serviceName with a non-empty value.",
+                example_payload={
+                    "name": "manage_service",
+                    "arguments": {
+                        "payload": {"serviceName": "modbus", "enabled": True},
+                    },
+                },
+            )
+        normalized_payload["serviceName"] = service_name.strip()
+
+        control_fields = {
+            "enabled",
+            "active",
+            "running",
+            "state",
+            "status",
+            "action",
+            "start",
+            "stop",
+            "restart",
+            "pause",
+            "resume",
+        }
+        has_control_field = any(
+            key in normalized_payload and normalized_payload.get(key) is not None
+            for key in control_fields
+        )
+        if not has_control_field:
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="manage_service payload requires at least one service control field",
+                expected_args={
+                    "payload": (
+                        "include one of enabled/active/running/state/status/action/"
+                        "start/stop/restart/pause/resume"
+                    )
+                },
+                received_args={"payload": normalized_payload},
+                suggested_fix=(
+                    "Add a control field, for example enabled=true, to describe the "
+                    "requested state change."
+                ),
+                example_payload={
+                    "name": "manage_service",
+                    "arguments": {
+                        "payload": {"serviceName": "modbus", "enabled": True},
+                    },
                 },
             )
 
@@ -2149,13 +2281,18 @@ def create_server(
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
+        validated_payload = _validate_manage_service_payload(
+            tool_name="manage_service",
+            payload=payload,
+        )
+
         if dry_run:
             return {
                 "mode": "dry_run",
                 "status": "success",
                 "tool_name": "manage_service",
                 "action": "manageService",
-                "payload": payload,
+                "payload": validated_payload,
                 "execution_status": "not_executed",
                 "preview": "Service management change preview only",
                 "warnings": [
@@ -2190,26 +2327,10 @@ def create_server(
                 reason_code="missing_write_confirmation",
             )
 
-        if not isinstance(payload, dict) or not payload:
-            raise _validation_failure(
-                tool_name="manage_service",
-                message="payload is required",
-                expected_args={"payload": "object (required)"},
-                received_args={"payload": payload},
-                suggested_fix="Provide the manageService payload from FairCom API docs.",
-                example_payload={
-                    "name": "manage_service",
-                    "arguments": {
-                        "payload": {"serviceName": "modbus", "enabled": True},
-                        "confirm_write": True,
-                    },
-                },
-            )
-
         result = _run_tool(
             "manage_service",
             "admin",
-            lambda: client.admin_action("manageService", payload),
+            lambda: client.admin_action("manageService", validated_payload),
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -2306,6 +2427,154 @@ def create_server(
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
+        _missing_value = object()
+
+        def _extract_input_records(value: object) -> list[dict[str, object]]:
+            if isinstance(value, list):
+                return [entry for entry in value if isinstance(entry, dict)]
+            if not isinstance(value, dict):
+                return []
+
+            direct_records: list[dict[str, object]] = []
+            for key in ("inputs", "results", "data", "items"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    direct_records.extend(
+                        entry for entry in nested if isinstance(entry, dict)
+                    )
+            if direct_records:
+                return direct_records
+            return [value]
+
+        def _coerce_comparable(value: object) -> object:
+            if isinstance(value, str):
+                stripped = value.strip()
+                lowered = stripped.lower()
+                if lowered in {"true", "yes", "on", "enabled", "running", "active"}:
+                    return True
+                if lowered in {"false", "no", "off", "disabled", "stopped", "inactive"}:
+                    return False
+                if stripped.isdigit():
+                    try:
+                        return int(stripped)
+                    except ValueError:
+                        return stripped
+                return stripped
+            if isinstance(value, float) and value.is_integer():
+                return int(value)
+            return value
+
+        def _extract_observed_value(record: dict[str, object], key: str) -> object:
+            if key in record:
+                return record.get(key, _missing_value)
+            settings = record.get("settings")
+            if isinstance(settings, dict) and key in settings:
+                return settings.get(key, _missing_value)
+            return _missing_value
+
+        def _verify_alter_input_mutation(resolved: dict[str, object]) -> dict[str, object]:
+            input_name = resolved.get("inputName")
+            if not isinstance(input_name, str) or not input_name.strip():
+                connector_name = resolved.get("connectorName")
+                if isinstance(connector_name, str) and connector_name.strip():
+                    input_name = connector_name.strip()
+            if not isinstance(input_name, str) or not input_name.strip():
+                return {
+                    "status": "skipped",
+                    "reason": "missing_input_identity",
+                    "message": "inputName/connectorName was not available for verification",
+                }
+
+            verify_keys = [
+                key
+                for key in (
+                    "dataCollectionIntervalMilliseconds",
+                    "enabled",
+                    "description",
+                    "tableName",
+                    "transformName",
+                )
+                if key in resolved
+            ]
+            if not verify_keys:
+                return {
+                    "status": "skipped",
+                    "reason": "no_verifiable_fields",
+                    "message": "No verifiable mutable fields were present in the payload",
+                }
+
+            described = connector_adapter.describe_inputs({"inputName": input_name})
+            records = _extract_input_records(described)
+            matching_record: dict[str, object] | None = None
+            for record in records:
+                candidate = record.get("inputName")
+                if isinstance(candidate, str) and candidate.strip() == input_name:
+                    matching_record = record
+                    break
+            if matching_record is None and records:
+                matching_record = records[0]
+
+            if matching_record is None:
+                return {
+                    "status": "skipped",
+                    "reason": "input_not_found",
+                    "message": "Input could not be read back for verification",
+                    "inputName": input_name,
+                }
+
+            mismatches: list[dict[str, object]] = []
+            for key in verify_keys:
+                expected = resolved.get(key)
+                observed = _extract_observed_value(matching_record, key)
+                if observed is _missing_value:
+                    mismatches.append(
+                        {
+                            "field": key,
+                            "expected": expected,
+                            "observed": "<missing>",
+                            "reason": "field_not_present_in_describe_inputs",
+                        }
+                    )
+                    continue
+
+                expected_normalized = _coerce_comparable(expected)
+                observed_normalized = _coerce_comparable(observed)
+                if observed_normalized != expected_normalized:
+                    mismatches.append(
+                        {
+                            "field": key,
+                            "expected": expected,
+                            "observed": observed,
+                            "expected_normalized": expected_normalized,
+                            "observed_normalized": observed_normalized,
+                        }
+                    )
+
+            if mismatches:
+                raise UpstreamAPIError(
+                    "alter_input was acknowledged upstream but requested changes were not observed",
+                    details={
+                        "errorCode": 0,
+                        "request_action": "alterInput",
+                        "inputName": input_name,
+                        "reason_code": "mutation_not_applied",
+                        "mismatches": mismatches,
+                        "verification_source": matching_record,
+                    },
+                    retryable=False,
+                    hint=(
+                        "The write call returned success but read-after-write verification "
+                        "did not match. Check service runtime state and connector mutability, "
+                        "then retry with a full payload."
+                    ),
+                )
+
+            return {
+                "status": "verified",
+                "inputName": input_name,
+                "verified_fields": verify_keys,
+            }
+
         audit_log.record(
             event_type="connector_write_attempt",
             details={
@@ -2410,12 +2679,14 @@ def create_server(
                     exc.details = {"recovery": guidance}
             raise
         if isinstance(result, dict):
+            verification = _verify_alter_input_mutation(resolved_payload)
             enriched = dict(result)
             enriched.update(
                 {
                     "dry_run_applied": False,
                     "confirm_write_required": True,
-                    "mutation_applied": True,
+                    "mutation_applied": verification.get("status") == "verified",
+                    "mutation_verification": verification,
                 }
             )
             return enriched
@@ -3171,6 +3442,7 @@ def create_server(
                     "create_input": ["payload", "confirm_write", "dry_run"],
                     "alter_input": ["payload", "confirm_write", "dry_run"],
                     "delete_input": ["payload", "confirm_write", "dry_run"],
+                    "manage_service": ["payload", "confirm_write", "dry_run"],
                     "list_outputs": ["payload"],
                     "describe_outputs": ["payload"],
                     "create_output": ["payload", "confirm_write", "dry_run"],
@@ -3215,6 +3487,7 @@ def create_server(
                     "create_input": {},
                     "alter_input": {},
                     "delete_input": {},
+                    "manage_service": {},
                     "list_outputs": {},
                     "describe_outputs": {},
                     "create_output": {},
@@ -3264,6 +3537,13 @@ def create_server(
                                     }
                                 ],
                             },
+                            "confirm_write": True,
+                        },
+                    },
+                    "manage_service": {
+                        "name": "manage_service",
+                        "arguments": {
+                            "payload": {"serviceName": "modbus", "enabled": True},
                             "confirm_write": True,
                         },
                     },
@@ -3337,6 +3617,7 @@ def create_server(
                     "sql_query": "complete",
                     "list_tables": "complete",
                     "create_input": "complete",
+                    "manage_service": "complete",
                     "create_output": "complete",
                     "create_transform": "requires_existing_code_package",
                     "register_code_package": "complete",
@@ -3394,6 +3675,7 @@ def create_server(
             "createTransform",
             "alterTransform",
             "deleteTransform",
+            "manageService",
         }
         if action not in allowed_actions:
             raise _validation_failure(
@@ -3403,7 +3685,8 @@ def create_server(
                     "action": (
                         "one of createInput/alterInput/deleteInput/"
                         "createOutput/alterOutput/deleteOutput/"
-                        "createTransform/alterTransform/deleteTransform"
+                        "createTransform/alterTransform/deleteTransform/"
+                        "manageService"
                     ),
                     "payload": "object (optional, single preflight)",
                     "payloads": "array<object> (optional, batch preflight)",
@@ -3441,7 +3724,8 @@ def create_server(
                     "action": (
                         "one of createInput/alterInput/deleteInput/"
                         "createOutput/alterOutput/deleteOutput/"
-                        "createTransform/alterTransform/deleteTransform"
+                        "createTransform/alterTransform/deleteTransform/"
+                        "manageService"
                     ),
                     "payload": "object (optional, single preflight)",
                     "payloads": "array<object> (optional, batch preflight)",
@@ -3620,11 +3904,17 @@ def create_server(
                     continue
 
                 try:
-                    normalized_payload = _require_connector_payload(
-                        tool_name="validate_connector_payloads",
-                        payload=item,
-                        action=action,
-                    )
+                    if action == "manageService":
+                        normalized_payload = _validate_manage_service_payload(
+                            tool_name="validate_connector_payloads",
+                            payload=item,
+                        )
+                    else:
+                        normalized_payload = _require_connector_payload(
+                            tool_name="validate_connector_payloads",
+                            payload=item,
+                            action=action,
+                        )
                 except ValidationFailure as exc:
                     invalid_count += 1
                     received_args = exc.details.get("received_args", {})
@@ -3645,11 +3935,22 @@ def create_server(
                     continue
 
                 valid_count += 1
-                validation = _validate_connector_schema(
-                    tool_name="validate_connector_payloads",
-                    action=action,
-                    payload=normalized_payload,
-                )
+                if action == "manageService":
+                    validation = {
+                        "service_name": normalized_payload.get("serviceName"),
+                        "warnings": [],
+                    }
+                    forwarded_payload = normalized_payload
+                else:
+                    validation = _validate_connector_schema(
+                        tool_name="validate_connector_payloads",
+                        action=action,
+                        payload=normalized_payload,
+                    )
+                    forwarded_payload = transform_connector_request(
+                        action,
+                        normalized_payload,
+                    )
                 results.append(
                     {
                         "index": index,
@@ -3658,10 +3959,7 @@ def create_server(
                         "schema_service": validation["service_name"],
                         "warnings": validation.get("warnings", []),
                         "normalized_payload": normalized_payload,
-                        "forwarded_payload": transform_connector_request(
-                            action,
-                            normalized_payload,
-                        ),
+                        "forwarded_payload": forwarded_payload,
                         "errors": [],
                     }
                 )
@@ -4328,6 +4626,18 @@ def create_server(
                             "idempotent": True,
                             "stability": "stable",
                             "description": "Describe configured input connectors.",
+                        },
+                        {
+                            "name": "manage_service",
+                            "aliases": ["manageService"],
+                            "group": "admin",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Manage connector service runtime state with confirmation "
+                                "guardrails and dry-run preview."
+                            ),
                         },
                         {
                             "name": "list_outputs",

@@ -38,6 +38,23 @@ class _CaptureConnectors:
         self.calls.append(("deleteInput", payload))
         return {"action": "deleteInput", "payload": payload}
 
+    def alter_input(self, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(("alterInput", payload))
+        return {"action": "alterInput", "payload": payload}
+
+    def describe_inputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+        self.calls.append(("describeInputs", payload or {}))
+        return {
+            "inputs": [
+                {
+                    "inputName": "modbus_input",
+                    "settings": {
+                        "dataCollectionIntervalMilliseconds": 5000,
+                    },
+                }
+            ]
+        }
+
 
 class _DescribeInputsWithSettings:
     def list_inputs(self, payload: dict[str, object] | None = None) -> dict[str, object]:
@@ -148,6 +165,50 @@ def test_compatibility_matrix_connector_confirmation_required(monkeypatch: objec
         server.tools["create_input"](payload={"connectorName": "demo_input"})
 
     assert exc.value.details["reason_code"] == "missing_write_confirmation"
+
+
+def test_compatibility_matrix_connector_write_nonzero_error_code_raises(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    class _CreateReturnsErrorPayload:
+        def create_input(self, payload: dict[str, object]) -> dict[str, object]:
+            _ = payload
+            return {
+                "errorCode": 12048,
+                "errorMessage": "Service is inactive",
+            }
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=_CreateReturnsErrorPayload(),
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    with pytest.raises(UpstreamAPIError) as exc:
+        server.tools["create_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
+                "modbusProtocol": "TCP",
+                "modbusServer": "127.0.0.1",
+                "modbusServerPort": 502,
+                "propertyMapList": [
+                    {
+                        "propertyName": "temperature",
+                        "modbusDataAccess": "holdingregister",
+                        "modbusDataAddress": 1199,
+                    }
+                ],
+            },
+            confirm_write=True,
+        )
+
+    assert exc.value.details["errorCode"] == 12048
 
 
 def test_compatibility_matrix_connector_payload_required(monkeypatch: object) -> None:
@@ -542,6 +603,111 @@ def test_compatibility_matrix_alter_input_adds_recovery_for_inactive_service(
     assert recovery["reason_code"] == "service_inactive"
 
 
+def test_compatibility_matrix_alter_input_detects_non_applied_mutation(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    class _AlterReturnsSuccessButDoesNotApply:
+        def alter_input(self, payload: dict[str, object]) -> dict[str, object]:
+            _ = payload
+            return {"errorCode": 0, "errorMessage": "", "result": {"ok": True}}
+
+        def describe_inputs(
+            self, payload: dict[str, object] | None = None
+        ) -> dict[str, object]:
+            _ = payload
+            return {
+                "inputs": [
+                    {
+                        "inputName": "modbus_input",
+                        "settings": {
+                            "dataCollectionIntervalMilliseconds": 5000,
+                        },
+                    }
+                ]
+            }
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=_AlterReturnsSuccessButDoesNotApply(),
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    with pytest.raises(UpstreamAPIError) as exc:
+        server.tools["alter_input"](
+            payload={
+                "connectorName": "modbus_input",
+                "serviceName": "modbus",
+                "tableName": "modbus_energy_raw",
+                "modbusProtocol": "TCP",
+                "modbusServer": "127.0.0.1",
+                "modbusServerPort": 502,
+                "dataCollectionIntervalMilliseconds": 15000,
+                "propertyMapList": [
+                    {
+                        "propertyName": "temperature",
+                        "modbusDataAccess": "holdingregister",
+                        "modbusDataAddress": 1199,
+                    }
+                ],
+            },
+            confirm_write=True,
+        )
+
+    assert exc.value.details["reason_code"] == "mutation_not_applied"
+    assert any(item["field"] == "dataCollectionIntervalMilliseconds" for item in exc.value.details["mismatches"])
+
+
+def test_compatibility_matrix_manage_service_requires_control_field(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["manage_service"](
+            payload={
+                "serviceName": "modbus",
+                "totallyBogusField": 12345,
+            },
+            dry_run=True,
+        )
+
+    assert exc.value.details["tool_name"] == "manage_service"
+    assert "requires at least one service control field" in exc.value.message
+
+
+def test_compatibility_matrix_validate_connector_payloads_supports_manage_service(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="manageService",
+        payload={"serviceName": "modbus", "enabled": True},
+    )
+
+    assert result["summary"]["all_valid"] is True
+    assert result["results"][0]["status"] == "valid"
+    assert result["results"][0]["forwarded_payload"]["enabled"] is True
+
+
+def test_compatibility_matrix_validate_connector_payloads_rejects_invalid_manage_service(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="manageService",
+        payload={"serviceName": "modbus", "totallyBogusField": 12345},
+    )
+
+    assert result["summary"]["all_valid"] is False
+    assert result["results"][0]["status"] == "invalid"
+
+
 def test_compatibility_matrix_modbus_unknown_key_is_passed_through(monkeypatch: object) -> None:
     server = _make_server(monkeypatch)
     result = server.tools["validate_connector_payloads"](
@@ -762,6 +928,31 @@ def test_compatibility_matrix_transform_preflight_rejects_unknown_step_method(
     )
     assert step_method_issue["reason"] == "invalid_enum"
     assert "javascript" in step_method_issue["allowed_values"]
+
+
+def test_compatibility_matrix_transform_write_validation_error_is_actionable(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_transform"](
+            payload={
+                "transformName": "bad_method_asset01",
+                "serviceName": "javascript",
+                "transformActions": [
+                    {
+                        "inputFields": ["source_payload"],
+                        "transformStepMethod": "jsonTransform",
+                        "transformParams": {},
+                    }
+                ],
+            },
+            confirm_write=True,
+        )
+
+    assert "payload.transformActions[0].transformStepMethod" in exc.value.message
+    assert "invalid_enum" in exc.value.message
 
 
 def test_compatibility_matrix_transform_preflight_accepts_inline_script(

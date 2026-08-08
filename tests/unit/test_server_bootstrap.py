@@ -460,6 +460,11 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "payload",
         "payloads",
     ]
+    assert usage_contract["canonical_arg_keys"]["manage_service"] == [
+        "payload",
+        "confirm_write",
+        "dry_run",
+    ]
     assert usage_contract["canonical_arg_keys"]["register_code_package"] == [
         "code_name",
         "code",
@@ -486,6 +491,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert create_input_example["tableName"] == "modbus_energy_raw"
     assert create_output_example["serviceName"] == "mqtt"
     assert usage_contract["example_validity"]["create_input"] == "complete"
+    assert usage_contract["example_validity"]["manage_service"] == "complete"
     assert usage_contract["example_validity"]["create_output"] == "complete"
     assert (
         usage_contract["example_validity"]["create_transform"] == "requires_existing_code_package"
@@ -560,6 +566,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     )
     assert any(
         tool["name"] == "validate_connector_payloads" and tool["group"] == "admin"
+        for tool in capabilities["tools"]
+    )
+    assert any(
+        tool["name"] == "manage_service" and tool["group"] == "admin"
         for tool in capabilities["tools"]
     )
     assert any(
