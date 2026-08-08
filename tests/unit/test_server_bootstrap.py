@@ -302,11 +302,11 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "payload": {"serviceNames": ["modbus"]},
     }
     assert server.tools["manage_service"](
-        payload={"serviceName": "modbus", "enabled": True},
+        payload={"serviceName": "modbus", "command": "pause"},
         confirm_write=True,
     ) == {
         "action": "manageService",
-        "payload": {"serviceName": "modbus", "enabled": True},
+        "payload": {"serviceName": "modbus", "command": "pause"},
         "dry_run_applied": False,
         "confirm_write_required": True,
         "mutation_applied": True,
@@ -616,6 +616,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "tracing_enabled": False,
             "diagnostics_enabled": False,
             "readiness": {"configured": False, "status": "not_configured"},
+            "upstream": {"configured": True, "status": "ok"},
         },
     }
     try:

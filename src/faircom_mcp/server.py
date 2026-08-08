@@ -26,7 +26,12 @@ from faircom_mcp.api.dialect import detect_unsupported_features, normalize_selec
 from faircom_mcp.api.sql import SQLAdapter
 from faircom_mcp.api.tables import TableAdapter
 from faircom_mcp.config import AppConfig, load_config
-from faircom_mcp.errors import FaircomError, UpstreamAPIError, ValidationFailure
+from faircom_mcp.errors import (
+    FaircomError,
+    UpstreamAPIError,
+    ValidationFailure,
+    normalize_exception,
+)
 from faircom_mcp.observability import AuditLog, RuntimeMetrics, build_tracer, maybe_span
 
 _MODBUS_DATA_ACCESS_ENUM = [
@@ -1866,7 +1871,7 @@ def create_server(
                 example_payload={
                     "name": "manage_service",
                     "arguments": {
-                        "payload": {"serviceName": "modbus", "enabled": True},
+                        "payload": {"serviceName": "modbus", "command": "pause"},
                     },
                 },
             )
@@ -1883,26 +1888,13 @@ def create_server(
                 example_payload={
                     "name": "manage_service",
                     "arguments": {
-                        "payload": {"serviceName": "modbus", "enabled": True},
+                        "payload": {"serviceName": "modbus", "command": "pause"},
                     },
                 },
             )
         normalized_payload["serviceName"] = service_name.strip()
 
-        control_fields = {
-            "enabled",
-            "active",
-            "running",
-            "state",
-            "status",
-            "action",
-            "start",
-            "stop",
-            "restart",
-            "pause",
-            "resume",
-        }
-        allowed_fields = {"serviceName", *control_fields}
+        allowed_fields = {"serviceName", "command"}
         unexpected_fields = sorted(
             key for key in normalized_payload if isinstance(key, str) and key not in allowed_fields
         )
@@ -1911,100 +1903,61 @@ def create_server(
                 tool_name=tool_name,
                 message="manage_service payload contains unsupported fields",
                 expected_args={
-                    "payload": (
-                        "serviceName plus one or more control fields: "
-                        "enabled/active/running/state/status/action/start/stop/restart/pause/resume"
-                    )
+                    "payload": ("serviceName plus command: pause/resume/restart/shutdown/startup")
                 },
                 received_args={
                     "payload": normalized_payload,
                     "unsupported_fields": unexpected_fields,
                 },
-                suggested_fix=(
-                    "Remove unsupported fields and retry with documented manage_service keys only."
-                ),
+                suggested_fix="Use payload.serviceName and payload.command only.",
                 example_payload={
                     "name": "manage_service",
                     "arguments": {
-                        "payload": {"serviceName": "modbus", "action": "start"},
+                        "payload": {"serviceName": "modbus", "command": "pause"},
                     },
                 },
             )
 
         command_values = {
-            "start",
-            "stop",
-            "restart",
             "pause",
             "resume",
-            "enable",
-            "disable",
-            "active",
-            "inactive",
-            "running",
-            "stopped",
+            "restart",
+            "shutdown",
+            "startup",
         }
-        for command_field in ("action", "state", "status"):
-            raw_value = normalized_payload.get(command_field)
-            if raw_value is None:
-                continue
-            if not isinstance(raw_value, str) or not raw_value.strip():
-                raise _validation_failure(
-                    tool_name=tool_name,
-                    message=f"{command_field} must be a non-empty string when provided",
-                    expected_args={f"payload.{command_field}": f"one of {sorted(command_values)}"},
-                    received_args={"payload": normalized_payload},
-                    suggested_fix=f"Set {command_field} to a supported command value.",
-                    example_payload={
-                        "name": "manage_service",
-                        "arguments": {
-                            "payload": {"serviceName": "modbus", command_field: "start"},
-                        },
-                    },
-                )
-            normalized_value = raw_value.strip().lower()
-            normalized_payload[command_field] = normalized_value
-            if normalized_value not in command_values:
-                raise _validation_failure(
-                    tool_name=tool_name,
-                    message=f"Unsupported {command_field} value",
-                    expected_args={f"payload.{command_field}": f"one of {sorted(command_values)}"},
-                    received_args={"payload": normalized_payload},
-                    suggested_fix=(
-                        "Use one of the documented manage_service command values "
-                        f"for {command_field}."
-                    ),
-                    example_payload={
-                        "name": "manage_service",
-                        "arguments": {
-                            "payload": {"serviceName": "modbus", command_field: "start"},
-                        },
-                    },
-                )
-
-        has_control_field = any(
-            key in normalized_payload and normalized_payload.get(key) is not None
-            for key in control_fields
-        )
-        if not has_control_field:
+        raw_command = normalized_payload.get("command")
+        if not isinstance(raw_command, str) or not raw_command.strip():
             raise _validation_failure(
                 tool_name=tool_name,
-                message="manage_service payload requires at least one service control field",
+                message="manage_service payload requires payload.command",
                 expected_args={
                     "payload": (
-                        "include one of enabled/active/running/state/status/action/"
-                        "start/stop/restart/pause/resume"
+                        "include payload.command with one of: pause/resume/restart/shutdown/startup"
                     )
                 },
                 received_args={"payload": normalized_payload},
-                suggested_fix=(
-                    "Add a control field, for example enabled=true, to describe the "
-                    "requested state change."
-                ),
+                suggested_fix="Provide payload.command with a supported value.",
                 example_payload={
                     "name": "manage_service",
                     "arguments": {
-                        "payload": {"serviceName": "modbus", "enabled": True},
+                        "payload": {"serviceName": "modbus", "command": "pause"},
+                    },
+                },
+            )
+
+        normalized_command = raw_command.strip().lower()
+        normalized_payload["command"] = normalized_command
+        if normalized_command not in command_values:
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="Unsupported command value for manage_service",
+                expected_args={"payload.command": f"one of {sorted(command_values)}"},
+                received_args={"payload": normalized_payload},
+                suggested_fix="Use a documented manage_service command value.",
+                example_payload={
+                    "name": "manage_service",
+                    "arguments": {
+                        "payload": {"serviceName": "modbus", "command": "pause"},
                     },
                 },
             )
@@ -2476,7 +2429,7 @@ def create_server(
                 example_payload={
                     "name": "manage_service",
                     "arguments": {
-                        "payload": {"serviceName": "modbus", "enabled": True},
+                        "payload": {"serviceName": "modbus", "command": "pause"},
                         "confirm_write": True,
                     },
                 },
@@ -2636,8 +2589,8 @@ def create_server(
             return _missing_value
 
         def _verify_alter_input_mutation(resolved: dict[str, object]) -> dict[str, object]:
-            verify_timeout_seconds = 3.0
-            verify_poll_interval_seconds = 0.25
+            verify_timeout_seconds = 6.0
+            verify_poll_interval_seconds = 0.3
             input_name = resolved.get("inputName")
             if not isinstance(input_name, str) or not input_name.strip():
                 connector_name = resolved.get("connectorName")
@@ -2673,6 +2626,8 @@ def create_server(
             latest_mismatches: list[dict[str, object]] = []
             latest_record: dict[str, object] | None = None
             latest_reason = "input_not_found"
+            observed_fields: set[str] = set()
+            last_observed_values: dict[str, object] = {}
 
             while True:
                 attempt_count += 1
@@ -2690,20 +2645,16 @@ def create_server(
                 if matching_record is not None:
                     latest_record = matching_record
                     mismatches: list[dict[str, object]] = []
+                    comparable_fields: list[str] = []
                     for key in verify_keys:
                         expected = resolved.get(key)
                         observed = _extract_observed_value(matching_record, key)
                         if observed is _missing_value:
-                            mismatches.append(
-                                {
-                                    "field": key,
-                                    "expected": expected,
-                                    "observed": "<missing>",
-                                    "reason": "field_not_present_in_describe_inputs",
-                                }
-                            )
                             continue
 
+                        observed_fields.add(key)
+                        comparable_fields.append(key)
+                        last_observed_values[key] = observed
                         expected_normalized = _coerce_comparable(expected)
                         observed_normalized = _coerce_comparable(observed)
                         if observed_normalized != expected_normalized:
@@ -2717,30 +2668,38 @@ def create_server(
                                 }
                             )
 
-                    if not mismatches:
+                    if comparable_fields and not mismatches:
                         return {
                             "status": "verified",
                             "inputName": input_name,
-                            "verified_fields": verify_keys,
+                            "verified_fields": comparable_fields,
+                            "requested_fields": verify_keys,
                             "attempts": attempt_count,
                             "poll_timeout_seconds": verify_timeout_seconds,
                         }
 
-                    latest_reason = "mutation_not_applied"
-                    latest_mismatches = mismatches
+                    if comparable_fields:
+                        latest_reason = "mutation_not_applied"
+                        latest_mismatches = mismatches
+                    else:
+                        latest_reason = "verification_fields_not_observable"
 
                 if time.monotonic() >= deadline:
                     break
                 time.sleep(verify_poll_interval_seconds)
 
             raise UpstreamAPIError(
-                "alter_input was acknowledged upstream but requested changes were not observed",
+                "alter_input write acknowledged but post-commit verification timed out",
                 details={
                     "errorCode": 0,
+                    "verification_error_code": "post_commit_verification_timeout",
                     "request_action": "alterInput",
                     "inputName": input_name,
                     "reason_code": latest_reason,
                     "mismatches": latest_mismatches,
+                    "observed_fields": sorted(observed_fields),
+                    "requested_fields": verify_keys,
+                    "last_observed_values": last_observed_values,
                     "verification_source": latest_record,
                     "verification_attempts": attempt_count,
                     "verification_timeout_seconds": verify_timeout_seconds,
@@ -2748,9 +2707,8 @@ def create_server(
                 retryable=False,
                 hint=(
                     "The write call returned success but read-after-write verification did not "
-                    "converge before timeout. Check service runtime state and connector "
-                    "mutability, "
-                    "then retry with a full payload."
+                    "converge before timeout. Confirm the latest state with describe_inputs "
+                    "before retrying to avoid duplicate writes."
                 ),
             )
 
@@ -2846,7 +2804,7 @@ def create_server(
                     "message": (
                         "The target input service appears inactive. Use list_services to inspect "
                         "runtime state, then manage_service with "
-                        "confirm_write=true to enable/start "
+                        "confirm_write=true to start up "
                         "the service before retrying alter_input."
                     ),
                     "service_name": resolved_payload.get("serviceName"),
@@ -2863,7 +2821,7 @@ def create_server(
                         "arguments": {
                             "payload": {
                                 "serviceName": resolved_payload.get("serviceName"),
-                                "enabled": True,
+                                "command": "startup",
                             },
                             "confirm_write": True,
                         },
@@ -3749,7 +3707,7 @@ def create_server(
                     "manage_service": {
                         "name": "manage_service",
                         "arguments": {
-                            "payload": {"serviceName": "modbus", "enabled": True},
+                            "payload": {"serviceName": "modbus", "command": "pause"},
                             "confirm_write": True,
                         },
                     },
@@ -5099,8 +5057,46 @@ def create_server(
             else:
                 readiness_state = {"configured": True, "status": "not_ready"}
 
+        upstream_state: dict[str, object] = {"configured": hasattr(client, "admin_action")}
+        admin_action = getattr(client, "admin_action", None)
+        if callable(admin_action):
+            upstream_holder: dict[str, object] = {"error": None}
+
+            def _run_upstream_probe() -> None:
+                try:
+                    admin_action("listServices", None)
+                except Exception as exc:  # pragma: no cover - defensive branch
+                    upstream_holder["error"] = exc
+
+            thread = threading.Thread(target=_run_upstream_probe, daemon=True)
+            thread.start()
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                upstream_state.update(
+                    {
+                        "status": "timeout",
+                        "timeout_seconds": 2.0,
+                    }
+                )
+            elif upstream_holder["error"] is not None:
+                probe_error = cast(Exception, upstream_holder["error"])
+                normalized = normalize_exception(probe_error)
+                upstream_state.update(
+                    {
+                        "status": "degraded",
+                        "error_code": str(normalized.code),
+                        "error_message": normalized.message,
+                    }
+                )
+            else:
+                upstream_state.update({"status": "ok"})
+        else:
+            upstream_state.update({"status": "not_configured"})
+
         overall_status = "ok"
         if readiness_state.get("configured") and readiness_state.get("status") != "ready":
+            overall_status = "degraded"
+        if upstream_state.get("configured") and upstream_state.get("status") != "ok":
             overall_status = "degraded"
 
         return _run_tool(
@@ -5114,6 +5110,7 @@ def create_server(
                     "tracing_enabled": resolved_config.observability.enable_tracing,
                     "diagnostics_enabled": resolved_config.security.diagnostics_enabled,
                     "readiness": readiness_state,
+                    "upstream": upstream_state,
                 },
             },
         )

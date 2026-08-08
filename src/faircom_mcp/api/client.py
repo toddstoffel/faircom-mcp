@@ -334,12 +334,23 @@ class FaircomAPIClient:
             return True
 
         error_message = exc.details.get("errorMessage")
-        if isinstance(error_message, str) and "12031" in error_message:
-            return True
+        if isinstance(error_message, str):
+            lowered_message = error_message.lower()
+            if "12031" in lowered_message:
+                return True
+            if "authtoken" in lowered_message and "session" in lowered_message:
+                return True
 
         raw_body = exc.details.get("body")
         if not isinstance(raw_body, str) or not raw_body.strip():
             return False
+
+        lowered_body = raw_body.lower()
+        if "12031" in lowered_body:
+            return True
+        if "authtoken" in lowered_body and "session" in lowered_body:
+            return True
+
         try:
             body_payload = json.loads(raw_body)
         except json.JSONDecodeError:

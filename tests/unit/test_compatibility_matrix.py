@@ -762,12 +762,12 @@ def test_compatibility_matrix_validate_connector_payloads_supports_manage_servic
 
     result = server.tools["validate_connector_payloads"](
         action="manage_service",
-        payload={"serviceName": "modbus", "enabled": True},
+        payload={"serviceName": "modbus", "command": "pause"},
     )
 
     assert result["summary"]["all_valid"] is True
     assert result["results"][0]["action"] == "manageService"
-    assert result["results"][0]["forwarded_payload"]["enabled"] is True
+    assert result["results"][0]["forwarded_payload"]["command"] == "pause"
 
 
 def test_compatibility_matrix_validate_connector_payloads_supports_manage_service(
@@ -777,12 +777,12 @@ def test_compatibility_matrix_validate_connector_payloads_supports_manage_servic
 
     result = server.tools["validate_connector_payloads"](
         action="manageService",
-        payload={"serviceName": "modbus", "enabled": True},
+        payload={"serviceName": "modbus", "command": "pause"},
     )
 
     assert result["summary"]["all_valid"] is True
     assert result["results"][0]["status"] == "valid"
-    assert result["results"][0]["forwarded_payload"]["enabled"] is True
+    assert result["results"][0]["forwarded_payload"]["command"] == "pause"
 
 
 def test_compatibility_matrix_alter_input_polls_until_commit_visible(
