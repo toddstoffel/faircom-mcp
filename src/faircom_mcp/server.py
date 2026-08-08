@@ -3932,6 +3932,8 @@ def create_server(
                     continue
 
                 valid_count += 1
+                validation: dict[str, object]
+                forwarded_payload: dict[str, object] | None
                 if action == "manageService":
                     validation = {
                         "service_name": normalized_payload.get("serviceName"),
@@ -3944,10 +3946,7 @@ def create_server(
                         action=action,
                         payload=normalized_payload,
                     )
-                    forwarded_payload = transform_connector_request(
-                        action,
-                        normalized_payload,
-                    )
+                    forwarded_payload = transform_connector_request(action, normalized_payload)
                 results.append(
                     {
                         "index": index,
