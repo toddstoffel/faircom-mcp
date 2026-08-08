@@ -814,6 +814,7 @@ def create_server(
             action=action,
             payload=normalized_payload,
         )
+        validation_warnings = cast(list[str], validation.get("warnings", []))
         schema_validated = validation["status"] == "validated"
         schema_outcome = "schema_valid" if schema_validated else "unvalidated"
         forwarded_payload = transform_connector_request(action, normalized_payload)
@@ -1903,9 +1904,7 @@ def create_server(
         }
         allowed_fields = {"serviceName", *control_fields}
         unexpected_fields = sorted(
-            key
-            for key in normalized_payload
-            if isinstance(key, str) and key not in allowed_fields
+            key for key in normalized_payload if isinstance(key, str) and key not in allowed_fields
         )
         if unexpected_fields:
             raise _validation_failure(

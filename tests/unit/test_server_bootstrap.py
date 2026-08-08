@@ -235,8 +235,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
 
     assert _get("/health", app).json() == {"status": "ok"}
     assert _get("/healthz", app).json() == {"status": "ok"}
-    assert _get("/ready", app).json() == {"status": "ready"}
-    assert _get("/readyz", app).json() == {"status": "ready"}
+    assert _get("/ready", app).json() == {"status": "ready", "reason": "ok"}
+    assert _get("/readyz", app).json() == {"status": "ready", "reason": "ok"}
 
     assert server.tools["list_tables"]() == {
         "tables": [],
@@ -615,6 +615,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "metrics_enabled": True,
             "tracing_enabled": False,
             "diagnostics_enabled": False,
+            "readiness": {"configured": False, "status": "not_configured"},
         },
     }
     try:
