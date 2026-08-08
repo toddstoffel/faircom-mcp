@@ -20,11 +20,12 @@ Options:
   -h, --help      Show this help message
 
 What this does:
-  1) Creates and pushes the tag to origin
-  2) Triggers:
+  1) Runs local lint checks before any tag is pushed
+  2) Creates and pushes the tag to origin
+  3) Triggers:
      - Release workflow (publishes GitHub release assets)
      - Docker Hub workflow (publishes multi-arch image)
-  3) Optionally waits for both workflow runs to complete
+  4) Optionally waits for both workflow runs to complete
 EOF
 }
 
@@ -33,6 +34,21 @@ require_cmd() {
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+run_lint_preflight() {
+  if command -v python >/dev/null 2>&1; then
+    python -m ruff check src tests
+    return
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -m ruff check src tests
+    return
+  fi
+
+  echo "Missing Python interpreter for lint preflight (python/python3)." >&2
+  exit 1
 }
 
 TAG=""
@@ -93,6 +109,9 @@ if [[ "${ALLOW_DIRTY}" -ne 1 ]] && [[ -n "$(git status --porcelain)" ]]; then
   echo "Working tree has uncommitted changes. Commit/stash first or use --allow-dirty." >&2
   exit 1
 fi
+
+echo "Running local lint preflight"
+run_lint_preflight
 
 if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
   echo "Tag already exists locally: ${TAG}" >&2

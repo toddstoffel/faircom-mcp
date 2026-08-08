@@ -262,6 +262,9 @@ Recommended:
 devtools/publish_release.sh "v${PROJECT_VERSION}"
 ```
 
+The publish script runs `make lint` before it creates or pushes the tag, so release
+publishing fails locally before GitHub Actions sees a bad release candidate.
+
 Script options:
 
 ```bash
