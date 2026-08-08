@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set version from tag
+        run: |
+          VERSION=${{ github.ref_name }}
+          VERSION=${VERSION#v}  # Strip leading 'v'
+
+          # Keep the canonical version source aligned with the pushed tag.
+          python3 - "$VERSION" << 'PYTHON_EOF'
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          version_file = Path('src/faircom_mcp/_version.py')
+          version_file.write_text(
+              f'from __future__ import annotations\n\n__version__ = "{version}"\n',
+              encoding='utf-8',
+          )
+          print(f"✓ Updated {version_file} to version {version}")
+          PYTHON_EOF
+
+      - name: Verify version matches tag
+        run: |
+          VERSION=${{ github.ref_name }}
+          VERSION=${VERSION#v}
+          ACTUAL_VERSION=$(PYTHONPATH=src python -c 'from faircom_mcp import __version__; print(__version__)')
+          test "$ACTUAL_VERSION" = "$VERSION"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build -e .[dev]
+
+      - name: Quality checks
+        run: |
+          python -m ruff check src tests
+          python -m mypy src
+          PYTHONPATH=src:. python -m pytest -m "not edge_integration"
+
+      - name: Build Python distribution
+        run: python -m build
+
+      - name: Build container image
+        run: docker build -t faircom-mcp:${{ github.ref_name }} .
+
+      - name: Verify packaging layout
+        run: make package-verify
+
+      - name: Install package build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
+
+      - name: Build DEB and RPM packages
+        env:
+          PACKAGE_BUILD_MODE: native
+        run: make package-build
+
+      - name: Inspect package metadata
+        run: |
+          dpkg-deb --info dist/packages/*.deb
+          rpm -qip dist/packages/*.rpm
+
+      - name: Validate package lifecycle
+        run: make package-validate
+
+      - name: Install integrity tooling
+        run: python -m pip install cyclonedx-bom
+
+      - name: Generate integrity artifacts
+        run: make release-integrity
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: faircom-mcp-${{ github.ref_name }}
+          path: |
+            dist/*
+            dist/packages/*
+            dist/sbom.cdx.json
+            dist/SHA256SUMS
+            Dockerfile
+            docker-compose.yml
+            packaging/**
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v3.0.2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/packages/*.deb
+            dist/packages/*.rpm
+            dist/*.whl
+            dist/*.tar.gz
+            dist/sbom.cdx.json
+            dist/SHA256SUMS
