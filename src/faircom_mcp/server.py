@@ -118,6 +118,16 @@ _MODBUS_ALLOWED_PROPERTY_MAP_KEYS = {
     "scale",
 }
 
+# FairCom rejects invalid testTransformScope values without listing the valid enum in its
+# error text, so we validate client-side using the enum from FairCom's own docs.
+_VALID_TEST_TRANSFORM_SCOPES = {
+    "allRecords",
+    "stop",
+    "firstRecord",
+    "lastRecord",
+    "specificRecords",
+}
+
 
 class ModbusPropertyMapItem(TypedDict, total=False):
     modbusDataAccess: Required[Literal["holdingregister", "inputregister", "coil", "discreteinput"]]
@@ -3066,6 +3076,259 @@ def create_server(
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
+        _missing_value = object()
+
+        def _extract_table_records(value: object) -> list[dict[str, object]]:
+            if isinstance(value, list):
+                return [entry for entry in value if isinstance(entry, dict)]
+            if not isinstance(value, dict):
+                return []
+
+            direct_records: list[dict[str, object]] = []
+            for key in ("tables", "results", "data", "items"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    direct_records.extend(entry for entry in nested if isinstance(entry, dict))
+            if direct_records:
+                return direct_records
+            return [value]
+
+        def _coerce_comparable(value: object) -> object:
+            if isinstance(value, str):
+                stripped = value.strip()
+                lowered = stripped.lower()
+                if lowered in {"true", "yes", "on", "enabled", "running", "active"}:
+                    return True
+                if lowered in {"false", "no", "off", "disabled", "stopped", "inactive"}:
+                    return False
+                if stripped.isdigit():
+                    try:
+                        return int(stripped)
+                    except ValueError:
+                        return stripped
+                return stripped
+            if isinstance(value, float) and value.is_integer():
+                return int(value)
+            return value
+
+        def _extract_field_names(record: dict[str, object]) -> set[str]:
+            fields = record.get("fields")
+            names: set[str] = set()
+            if isinstance(fields, list):
+                for entry in fields:
+                    if isinstance(entry, dict):
+                        name = entry.get("name")
+                        if isinstance(name, str):
+                            names.add(name)
+            return names
+
+        def _extract_transform_step_code_names(record: dict[str, object]) -> set[str]:
+            steps = record.get("transformSteps")
+            names: set[str] = set()
+            if isinstance(steps, list):
+                for step in steps:
+                    if isinstance(step, dict):
+                        code_name = step.get("codeName")
+                        if isinstance(code_name, str):
+                            names.add(code_name)
+            return names
+
+        def _verify_alter_integration_table_mutation(
+            resolved: dict[str, object],
+        ) -> dict[str, object]:
+            verify_timeout_seconds = 6.0
+            verify_poll_interval_seconds = 0.3
+            table_name = resolved.get("tableName")
+            if not isinstance(table_name, str) or not table_name.strip():
+                return {
+                    "status": "skipped",
+                    "reason": "missing_table_identity",
+                    "message": "tableName was not available for verification",
+                }
+
+            new_table_name = resolved.get("newTableName")
+            expected_table_name = (
+                new_table_name.strip()
+                if isinstance(new_table_name, str) and new_table_name.strip()
+                else table_name
+            )
+
+            describe_request: dict[str, object] = {"tableName": expected_table_name}
+            if "databaseName" in resolved:
+                describe_request["databaseName"] = resolved["databaseName"]
+            if "ownerName" in resolved:
+                describe_request["ownerName"] = resolved["ownerName"]
+
+            scalar_keys = [
+                key
+                for key in (
+                    "disableTransformSteps",
+                    "logTransformOverwrites",
+                    "retentionPolicy",
+                    "retentionPeriod",
+                    "retentionUnit",
+                )
+                if key in resolved
+            ]
+            add_field_names = {
+                entry.get("name")
+                for entry in (resolved.get("addFields") or [])
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+            }
+            delete_field_names = {
+                name for name in (resolved.get("deleteFields") or []) if isinstance(name, str)
+            }
+            requested_transform_steps = resolved.get("transformSteps")
+            expected_transform_code_names = (
+                {
+                    step.get("codeName")
+                    for step in requested_transform_steps
+                    if isinstance(step, dict) and isinstance(step.get("codeName"), str)
+                }
+                if isinstance(requested_transform_steps, list)
+                else set()
+            )
+            renaming = bool(isinstance(new_table_name, str) and new_table_name.strip())
+
+            if not any(
+                (
+                    scalar_keys,
+                    add_field_names,
+                    delete_field_names,
+                    expected_transform_code_names,
+                    renaming,
+                )
+            ):
+                return {
+                    "status": "skipped",
+                    "reason": "no_verifiable_fields",
+                    "message": "No verifiable mutable fields were present in the payload",
+                }
+
+            deadline = time.monotonic() + verify_timeout_seconds
+            attempt_count = 0
+            latest_mismatches: list[dict[str, object]] = []
+            latest_record: dict[str, object] | None = None
+            latest_reason = "table_not_found"
+
+            while True:
+                attempt_count += 1
+                described = connector_adapter.describe_integration_tables(
+                    {"tables": [describe_request]}
+                )
+                records = _extract_table_records(described)
+                matching_record: dict[str, object] | None = None
+                for record in records:
+                    candidate = record.get("tableName")
+                    if isinstance(candidate, str) and candidate.strip() == expected_table_name:
+                        matching_record = record
+                        break
+                if matching_record is None and records:
+                    matching_record = records[0]
+
+                if matching_record is not None:
+                    latest_record = matching_record
+                    mismatches: list[dict[str, object]] = []
+
+                    if renaming:
+                        observed_name = matching_record.get("tableName")
+                        if observed_name != expected_table_name:
+                            mismatches.append(
+                                {
+                                    "field": "newTableName",
+                                    "expected": expected_table_name,
+                                    "observed": observed_name,
+                                }
+                            )
+
+                    for key in scalar_keys:
+                        expected = resolved.get(key)
+                        observed = matching_record.get(key, _missing_value)
+                        if observed is _missing_value:
+                            continue
+                        if _coerce_comparable(observed) != _coerce_comparable(expected):
+                            mismatches.append(
+                                {"field": key, "expected": expected, "observed": observed}
+                            )
+
+                    if add_field_names:
+                        observed_fields = _extract_field_names(matching_record)
+                        missing = add_field_names - observed_fields
+                        if missing:
+                            mismatches.append(
+                                {
+                                    "field": "addFields",
+                                    "expected": sorted(add_field_names),
+                                    "observed": sorted(observed_fields),
+                                    "missing": sorted(missing),
+                                }
+                            )
+
+                    if delete_field_names:
+                        observed_fields = _extract_field_names(matching_record)
+                        still_present = delete_field_names & observed_fields
+                        if still_present:
+                            mismatches.append(
+                                {
+                                    "field": "deleteFields",
+                                    "expected_removed": sorted(delete_field_names),
+                                    "observed": sorted(observed_fields),
+                                    "still_present": sorted(still_present),
+                                }
+                            )
+
+                    if expected_transform_code_names:
+                        observed_steps = _extract_transform_step_code_names(matching_record)
+                        missing_steps = expected_transform_code_names - observed_steps
+                        if missing_steps:
+                            mismatches.append(
+                                {
+                                    "field": "transformSteps",
+                                    "expected_code_names": sorted(expected_transform_code_names),
+                                    "observed_code_names": sorted(observed_steps),
+                                    "missing_code_names": sorted(missing_steps),
+                                }
+                            )
+
+                    if not mismatches:
+                        return {
+                            "status": "verified",
+                            "tableName": expected_table_name,
+                            "attempts": attempt_count,
+                            "poll_timeout_seconds": verify_timeout_seconds,
+                        }
+
+                    latest_reason = "mutation_not_applied"
+                    latest_mismatches = mismatches
+
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(verify_poll_interval_seconds)
+
+            raise UpstreamAPIError(
+                "alter_integration_table write acknowledged but post-commit verification timed out",
+                details={
+                    "errorCode": 0,
+                    "verification_error_code": "post_commit_verification_timeout",
+                    "request_action": "alterIntegrationTable",
+                    "tableName": expected_table_name,
+                    "reason_code": latest_reason,
+                    "mismatches": latest_mismatches,
+                    "verification_source": latest_record,
+                    "verification_attempts": attempt_count,
+                    "verification_timeout_seconds": verify_timeout_seconds,
+                },
+                retryable=False,
+                hint=(
+                    "The write call returned success but read-after-write verification did not "
+                    "converge before timeout. FairCom's alterIntegrationTable is known to "
+                    "silently no-op for some fields/transformSteps. Confirm the latest state "
+                    "with describe_integration_tables before retrying, or recreate the table "
+                    "instead (delete_integration_tables + create_integration_table with all "
+                    "fields/transformSteps declared upfront)."
+                ),
+            )
+
         audit_log.record(
             event_type="connector_write_attempt",
             details={
@@ -3122,6 +3385,13 @@ def create_server(
                 exc=exc,
             )
             raise
+
+        verification: dict[str, object] | None = None
+
+        def _post_commit_verify(_result: object) -> None:
+            nonlocal verification
+            verification = _verify_alter_integration_table_mutation(resolved_payload)
+
         result = _execute_connector_write(
             tool_name="alter_integration_table",
             action="alterIntegrationTable",
@@ -3131,6 +3401,7 @@ def create_server(
                 "connector",
                 lambda: connector_adapter.alter_integration_table(resolved_payload),
             ),
+            post_commit_verifier=_post_commit_verify,
         )
         if isinstance(result, dict):
             enriched = dict(result)
@@ -3138,7 +3409,10 @@ def create_server(
                 {
                     "dry_run_applied": False,
                     "confirm_write_required": True,
-                    "mutation_applied": True,
+                    "mutation_applied": bool(
+                        verification and verification.get("status") == "verified"
+                    ),
+                    "mutation_verification": verification,
                 }
             )
             return enriched
@@ -3261,6 +3535,38 @@ def create_server(
                 tool_name="test_integration_table_transform_steps",
                 payload=payload,
             )
+            test_transform_scope = resolved_payload.get("testTransformScope")
+            if test_transform_scope not in _VALID_TEST_TRANSFORM_SCOPES:
+                raise _validation_failure(
+                    tool_name="test_integration_table_transform_steps",
+                    message=(
+                        "payload.testTransformScope is required and must be one of: "
+                        + ", ".join(sorted(_VALID_TEST_TRANSFORM_SCOPES))
+                    ),
+                    expected_args={
+                        "payload.testTransformScope": (
+                            "one of "
+                            + ", ".join(sorted(_VALID_TEST_TRANSFORM_SCOPES))
+                            + " (required)"
+                        ),
+                    },
+                    received_args={"testTransformScope": test_transform_scope},
+                    suggested_fix=(
+                        "Set payload.testTransformScope to one of: "
+                        + ", ".join(sorted(_VALID_TEST_TRANSFORM_SCOPES))
+                        + ". FairCom's upstream error does not list these values."
+                    ),
+                    example_payload={
+                        "name": "test_integration_table_transform_steps",
+                        "arguments": {
+                            "payload": {
+                                "tableName": "modbus_factory_floor_raw",
+                                "testTransformScope": "firstRecord",
+                            }
+                        },
+                    },
+                    reason_code="invalid_arguments",
+                )
             if not confirm_write:
                 raise _validation_failure(
                     tool_name="test_integration_table_transform_steps",
@@ -4991,7 +5297,8 @@ def create_server(
                             "stability": "stable",
                             "description": (
                                 "Test new transform steps against an integration table before "
-                                "running them for real."
+                                "running them for real. payload.testTransformScope is required: "
+                                "one of allRecords, stop, firstRecord, lastRecord, specificRecords."
                             ),
                         },
                         {
