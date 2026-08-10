@@ -449,9 +449,45 @@ FAIRCOM_SQL_DENYLIST=DROP,TRUNCATE,ALTER
 | `sql_query(statement, params?)` | Execute SELECT (read-only) | Read-only |
 | `sql_query_page(statement, params?, page, page_size)` | Paginated SELECT | Read-only |
 | `sql_execute(statement, params?, confirm_write, dry_run)` | INSERT/UPDATE/DELETE (requires `confirm_write=true` unless `dry_run=true`) | Write |
+| `list_services(payload?)` | List Edge connector services and runtime state | Read-only |
+| `manage_service(payload, confirm_write, dry_run)` | Start/stop/restart a connector service | Write |
+| `describe_connector_schema(payload?)` | Local payload schema profiles and known-good examples per connector service | Read-only |
+| `validate_connector_payloads(payload)` | Preflight-validate connector payloads without mutating backend state | Read-only |
 | `get_usage_contract()` | Canonical args, aliases, transport/session guidance, examples | Read-only |
 | `runtime_status()` | Health, version, diagnostics | Read-only |
 | `capabilities_summary()` | Discover enabled tool groups and policy preset | Read-only |
+| `observability_metrics()` | Snapshot of internal runtime metrics | Read-only |
+| `observability_audit()` | Snapshot of the write/audit event log | Read-only |
+| `observability_health()` | Readiness/liveness state as an MCP tool call | Read-only |
+
+See [Connector Management](#connector-management) for input/output connector tools, and [Integration Tables & Code Packages](#integration-tables--code-packages) for transform pipeline tools.
+
+## Integration Tables & Code Packages
+
+Integration tables capture data landed by an input connector and apply `transformSteps` to it. A transform step's JavaScript logic lives in a separately registered code package; a table then references it by `codeName`. There is no single "transform" object — FairCom splits this across the `hub` API (integration tables) and the `admin` API (code packages), and FairCom MCP routes each tool call to the correct one for you.
+
+Read-oriented tools:
+
+- `list_integration_tables(payload?)` — list integration tables visible to the configured access context.
+- `describe_integration_tables(payload)` — describe tables including their `fields` and `transformSteps`. Pass a `tables` array, not a bare `tableName`.
+- `list_code_packages(payload?)` — list registered code package names for a database/owner.
+- `describe_code_packages(payload)` — describe registered code packages, including source code.
+
+Write-oriented tools (same `dry_run` / `confirm_write` safety model as SQL and connector writes):
+
+- `create_integration_table(payload, confirm_write, dry_run)` — create a table, optionally with `fields` and `transformSteps` in the same call.
+- `alter_integration_table(payload, confirm_write, dry_run)` — alter a table's fields, transform steps, or retention policy. The server polls `describe_integration_tables` after the write and reports `mutation_applied` / `mutation_verification` in the response, because FairCom can return success while silently not applying some field or transform-step changes.
+- `delete_integration_tables(payload, confirm_write, dry_run)`
+- `register_code_package(payload, confirm_write, dry_run)` — create or update a code package (`createCodePackage`/`alterCodePackage`).
+- `clone_code_package(payload, confirm_write, dry_run)` — clone an existing code package under a new name.
+- `revert_code_package(payload, confirm_write, dry_run)` — revert a code package to a prior version. There is no delete; re-registering the same `code_name` is how you update it.
+- `test_integration_table_transform_steps(payload, confirm_write, dry_run)` — dry-run transform steps against a table. `payload.testTransformScope` is required and validated against the known enum (`allRecords`, `stop`, `firstRecord`, `lastRecord`, `specificRecords`) since FairCom's own error does not list valid values.
+
+Important, field-tested gotchas:
+
+- Declare every target field in `create_integration_table`'s `fields` array up front. Neither the transform nor `alter_integration_table` can reliably add fields to an existing table afterward.
+- Put `databaseName` and `ownerName` inside each transform step object, not only at the table's top level, or FairCom rejects the step with a missing-default-database error.
+- A `transformStepMethod` of `"javascript"` requires `transformStepService: "v8TransformService"` alongside it.
 
 ## Common AI Client Mistakes (And Fixes)
 
