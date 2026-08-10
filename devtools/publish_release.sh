@@ -20,7 +20,7 @@ Options:
   -h, --help      Show this help message
 
 What this does:
-  1) Runs local lint checks before any tag is pushed
+  1) Runs local lint + formatting checks before any tag is pushed
   2) Creates and pushes the tag to origin
   3) Triggers:
      - Release workflow (publishes GitHub release assets)
@@ -38,11 +38,13 @@ require_cmd() {
 
 run_lint_preflight() {
   if command -v python >/dev/null 2>&1; then
+    python -m ruff format --check src tests
     python -m ruff check src tests
     return
   fi
 
   if command -v python3 >/dev/null 2>&1; then
+    python3 -m ruff format --check src tests
     python3 -m ruff check src tests
     return
   fi

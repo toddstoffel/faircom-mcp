@@ -182,9 +182,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             connector_calls.append(("revertCodePackage", payload))
             return {"result": {}, "errorCode": 0, "errorMessage": ""}
 
-        def list_code_packages(
-            self, payload: dict[str, object] | None = None
-        ) -> dict[str, object]:
+        def list_code_packages(self, payload: dict[str, object] | None = None) -> dict[str, object]:
             connector_calls.append(("listCodePackages", payload))
             return {"action": "listCodePackages", "payload": payload}
 

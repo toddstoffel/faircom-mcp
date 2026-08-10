@@ -1227,4 +1227,3 @@ def test_compatibility_matrix_register_code_package_alters_existing_package(
     _action, alter_payload = connector_adapter.calls[-1]
     assert alter_payload["codeName"] == "decode_mixing_tank"
     assert alter_payload["codeType"] == "integrationTableTransform"
-

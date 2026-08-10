@@ -3264,9 +3264,7 @@ def create_server(
             if not confirm_write:
                 raise _validation_failure(
                     tool_name="test_integration_table_transform_steps",
-                    message=(
-                        "test_integration_table_transform_steps requires confirm_write=True"
-                    ),
+                    message=("test_integration_table_transform_steps requires confirm_write=True"),
                     expected_args={
                         "payload": "object (required)",
                         "confirm_write": "true for non-dry-run changes",
@@ -3301,9 +3299,7 @@ def create_server(
             writer=lambda: _run_tool(
                 "test_integration_table_transform_steps",
                 "connector",
-                lambda: connector_adapter.test_integration_table_transform_steps(
-                    resolved_payload
-                ),
+                lambda: connector_adapter.test_integration_table_transform_steps(resolved_payload),
             ),
         )
         if isinstance(result, dict):
