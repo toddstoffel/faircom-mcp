@@ -3170,20 +3170,28 @@ def create_server(
                 )
                 if key in resolved
             ]
-            add_field_names = {
-                entry.get("name")
-                for entry in (resolved.get("addFields") or [])
-                if isinstance(entry, dict) and isinstance(entry.get("name"), str)
-            }
-            delete_field_names = {
-                name for name in (resolved.get("deleteFields") or []) if isinstance(name, str)
-            }
-            requested_transform_steps = resolved.get("transformSteps")
-            expected_transform_code_names = (
+            requested_add_fields = resolved.get("addFields")
+            add_field_names: set[str] = (
                 {
-                    step.get("codeName")
+                    name
+                    for entry in requested_add_fields
+                    if isinstance(entry, dict) and isinstance((name := entry.get("name")), str)
+                }
+                if isinstance(requested_add_fields, list)
+                else set()
+            )
+            requested_delete_fields = resolved.get("deleteFields")
+            delete_field_names: set[str] = (
+                {name for name in requested_delete_fields if isinstance(name, str)}
+                if isinstance(requested_delete_fields, list)
+                else set()
+            )
+            requested_transform_steps = resolved.get("transformSteps")
+            expected_transform_code_names: set[str] = (
+                {
+                    name
                     for step in requested_transform_steps
-                    if isinstance(step, dict) and isinstance(step.get("codeName"), str)
+                    if isinstance(step, dict) and isinstance((name := step.get("codeName")), str)
                 }
                 if isinstance(requested_transform_steps, list)
                 else set()
