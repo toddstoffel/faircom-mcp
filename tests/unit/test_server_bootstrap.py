@@ -136,27 +136,61 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             connector_calls.append(("deleteOutput", payload))
             return {"action": "deleteOutput", "payload": payload}
 
-        def list_transforms(self, payload: dict[str, object] | None = None) -> dict[str, object]:
-            connector_calls.append(("listTransforms", payload))
-            return {"action": "listTransforms", "payload": payload}
-
-        def describe_transforms(
+        def list_integration_tables(
             self, payload: dict[str, object] | None = None
         ) -> dict[str, object]:
-            connector_calls.append(("describeTransforms", payload))
-            return {"action": "describeTransforms", "payload": payload}
+            connector_calls.append(("listIntegrationTables", payload))
+            return {"action": "listIntegrationTables", "payload": payload}
 
-        def create_transform(self, payload: dict[str, object]) -> dict[str, object]:
-            connector_calls.append(("createTransform", payload))
-            return {"action": "createTransform", "payload": payload}
+        def describe_integration_tables(
+            self, payload: dict[str, object] | None = None
+        ) -> dict[str, object]:
+            connector_calls.append(("describeIntegrationTables", payload))
+            return {"action": "describeIntegrationTables", "payload": payload}
 
-        def alter_transform(self, payload: dict[str, object]) -> dict[str, object]:
-            connector_calls.append(("alterTransform", payload))
-            return {"action": "alterTransform", "payload": payload}
+        def create_integration_table(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("createIntegrationTable", payload))
+            return {"action": "createIntegrationTable", "payload": payload}
 
-        def delete_transform(self, payload: dict[str, object]) -> dict[str, object]:
-            connector_calls.append(("deleteTransform", payload))
-            return {"action": "deleteTransform", "payload": payload}
+        def alter_integration_table(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("alterIntegrationTable", payload))
+            return {"action": "alterIntegrationTable", "payload": payload}
+
+        def delete_integration_tables(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("deleteIntegrationTables", payload))
+            return {"action": "deleteIntegrationTables", "payload": payload}
+
+        def test_integration_table_transform_steps(
+            self, payload: dict[str, object]
+        ) -> dict[str, object]:
+            connector_calls.append(("testIntegrationTableTransformSteps", payload))
+            return {"action": "testIntegrationTableTransformSteps", "payload": payload}
+
+        def create_code_package(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("createCodePackage", payload))
+            return {"result": {}, "errorCode": 0, "errorMessage": ""}
+
+        def alter_code_package(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("alterCodePackage", payload))
+            return {"result": {}, "errorCode": 0, "errorMessage": ""}
+
+        def clone_code_package(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("cloneCodePackage", payload))
+            return {"result": {}, "errorCode": 0, "errorMessage": ""}
+
+        def revert_code_package(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("revertCodePackage", payload))
+            return {"result": {}, "errorCode": 0, "errorMessage": ""}
+
+        def list_code_packages(
+            self, payload: dict[str, object] | None = None
+        ) -> dict[str, object]:
+            connector_calls.append(("listCodePackages", payload))
+            return {"action": "listCodePackages", "payload": payload}
+
+        def describe_code_packages(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("describeCodePackages", payload))
+            return {"result": {"data": []}, "errorCode": 0, "errorMessage": ""}
 
     class FakeClient:
         def admin_action(
@@ -210,19 +244,22 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "create_output",
         "alter_output",
         "delete_output",
-        "list_transforms",
-        "describe_transforms",
-        "create_transform",
-        "alter_transform",
-        "delete_transform",
+        "list_integration_tables",
+        "describe_integration_tables",
+        "create_integration_table",
+        "alter_integration_table",
+        "delete_integration_tables",
+        "test_integration_table_transform_steps",
         "sql_query",
         "sql_query_page",
         "get_usage_contract",
         "describe_connector_schema",
         "validate_connector_payloads",
         "list_code_packages",
-        "describe_code_package",
+        "describe_code_packages",
         "register_code_package",
+        "clone_code_package",
+        "revert_code_package",
         "runtime_status",
         "capabilities_summary",
         "observability_metrics",
@@ -364,37 +401,27 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             "connectivity before calling with confirm_write=True."
         ),
     }
-    assert server.tools["create_transform"](
+    assert server.tools["create_integration_table"](
         payload={
-            "transformName": "normalize_energy_data",
-            "serviceName": "javascript",
-            "transformService": "v8TransformService",
-            "transformActions": [
+            "tableName": "normalize_energy_data",
+            "transformSteps": [
                 {
-                    "inputFields": ["*"],
                     "transformStepMethod": "javascript",
-                    "outputFields": ["*"],
-                    "transformParams": {"codeName": "decode_mixing_tank"},
+                    "transformStepService": "v8TransformService",
+                    "codeName": "decode_mixing_tank",
                 }
             ],
         },
         confirm_write=True,
     ) == {
-        "action": "createTransform",
+        "action": "createIntegrationTable",
         "payload": {
-            "transformName": "normalize_energy_data",
-            "connectorName": "normalize_energy_data",
-            "serviceName": "javascript",
-            "transformActions": [
+            "tableName": "normalize_energy_data",
+            "transformSteps": [
                 {
-                    "transformService": "v8TransformService",
-                    "inputFields": ["*"],
                     "transformStepMethod": "javascript",
-                    "outputFields": ["*"],
-                    "transformParams": {
-                        "codeName": "decode_mixing_tank",
-                        "codeType": "integrationTableTransform",
-                    },
+                    "transformStepService": "v8TransformService",
+                    "codeName": "decode_mixing_tank",
                 }
             ],
         },
@@ -403,20 +430,16 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "mutation_applied": True,
     }
     list_code_packages_result = server.tools["list_code_packages"]()
-    assert "SELECT TOP 200 id, codepackage_name" in list_code_packages_result["statement"]
+    assert list_code_packages_result["action"] == "listCodePackages"
 
-    describe_code_package_result = server.tools["describe_code_package"](
-        code_name="decode_mixing_tank"
+    describe_code_packages_result = server.tools["describe_code_packages"](
+        code_names=["decode_mixing_tank"]
     )
-    assert "FROM codepackage_name n" in describe_code_package_result["statement"]
-    assert (
-        "c.created_by, c.updated_by, c.code, c.comment" in describe_code_package_result["statement"]
-    )
+    assert describe_code_packages_result["result"] == {"data": []}
 
     register_code_package_dry_run = server.tools["register_code_package"](
         code_name="decode_mixing_tank",
         code="function transform(row){ return row; }",
-        language="sql",
         dry_run=True,
     )
     assert register_code_package_dry_run["status"] == "success"
@@ -469,12 +492,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "code_name",
         "code",
         "code_type",
-        "language",
-        "service_name",
-        "code_format",
+        "code_status",
         "database_name",
         "owner_name",
-        "created_by",
         "comment",
         "description",
         "metadata",
@@ -494,12 +514,13 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert usage_contract["example_validity"]["manage_service"] == "complete"
     assert usage_contract["example_validity"]["create_output"] == "complete"
     assert (
-        usage_contract["example_validity"]["create_transform"] == "requires_existing_code_package"
+        usage_contract["example_validity"]["create_integration_table"]
+        == "requires_existing_code_package"
     )
     assert usage_contract["example_validity"]["register_code_package"] == "complete"
     assert "modbus" in usage_contract["connector_payload_profiles"]
     assert "mqtt" in usage_contract["connector_payload_profiles"]
-    assert "javascript" in usage_contract["connector_payload_profiles"]
+    assert "javascript" not in usage_contract["connector_payload_profiles"]
     assert "required_keys" in usage_contract["connector_payload_profiles"]["modbus"]
     assert "enum_values" in usage_contract["connector_payload_profiles"]["modbus"]
     assert "schema" in usage_contract["connector_payload_profiles"]["modbus"]
@@ -530,8 +551,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert preflight["mode"] == "preflight"
     assert preflight["summary"]["all_valid"] is True
     delete_preflight = server.tools["validate_connector_payloads"](
-        action="deleteTransform",
-        payload={"transformName": "normalize_energy_data"},
+        action="deleteIntegrationTables",
+        payload={"tableNames": ["normalize_energy_data"]},
     )
     assert delete_preflight["mode"] == "preflight"
     assert delete_preflight["summary"]["all_valid"] is True
@@ -577,7 +598,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         for tool in capabilities["tools"]
     )
     assert any(
-        tool["name"] == "describe_code_package" and "aliases" not in tool
+        tool["name"] == "describe_code_packages" and "aliases" not in tool
         for tool in capabilities["tools"]
     )
     assert any(
@@ -585,7 +606,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         for tool in capabilities["tools"]
     )
     assert any(
-        tool["name"] == "create_transform" and "aliases" not in tool
+        tool["name"] == "create_integration_table" and "aliases" not in tool
         for tool in capabilities["tools"]
     )
     metrics_payload = server.tools["observability_metrics"]()
@@ -605,7 +626,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert {event["details"]["tool"] for event in audit_payload["events"]} == {
         "create_input",
         "create_output",
-        "create_transform",
+        "create_integration_table",
         "register_code_package",
     }
     assert server.tools["observability_health"]() == {
@@ -674,30 +695,33 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         ("listOutputs", {"connectorNameLike": "mqtt%"}),
         ("describeOutputs", {"connectorNames": ["mqtt_1"]}),
         (
-            "createTransform",
+            "createIntegrationTable",
             {
-                "transformName": "normalize_energy_data",
-                "connectorName": "normalize_energy_data",
-                "serviceName": "javascript",
-                "transformActions": [
+                "tableName": "normalize_energy_data",
+                "transformSteps": [
                     {
-                        "transformService": "v8TransformService",
-                        "inputFields": ["*"],
                         "transformStepMethod": "javascript",
-                        "outputFields": ["*"],
-                        "transformParams": {
-                            "codeName": "decode_mixing_tank",
-                            "codeType": "integrationTableTransform",
-                        },
+                        "transformStepService": "v8TransformService",
+                        "codeName": "decode_mixing_tank",
                     }
                 ],
             },
         ),
+        (
+            "listCodePackages",
+            {"databaseName": "faircom", "ownerName": "admin", "maxRecords": 200},
+        ),
+        (
+            "describeCodePackages",
+            {
+                "databaseName": "faircom",
+                "ownerName": "admin",
+                "codeNames": ["decode_mixing_tank"],
+                "codeFormat": "utf8",
+            },
+        ),
     ]
-    assert len(sql_query_calls) == 3
-    assert "FROM codepackage_name" in sql_query_calls[0][0]
-    assert "LEFT JOIN codepackage" in sql_query_calls[1][0]
-    assert sql_query_calls[2] == ("select * from demo", [1, "two"])
+    assert sql_query_calls == [("select * from demo", [1, "two"])]
     assert sql_query_page_calls == [("select * from demo order by id", ["active"], 3, 50)]
     assert sql_execute_calls == [
         ("update demo set flag = 1", ["x"]),

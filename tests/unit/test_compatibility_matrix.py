@@ -101,12 +101,6 @@ class _DescribeInputsWithSettings:
         }
 
 
-class _InvalidTransformConnector:
-    def create_input(self, payload: dict[str, object]) -> dict[str, object]:
-        _ = payload
-        return {"errorCode": 0, "errorMessage": "", "result": {"ok": True}}
-
-
 class _ReadinessCheckProbe:
     def __init__(self) -> None:
         self.calls = 0
@@ -117,33 +111,6 @@ class _ReadinessCheckProbe:
         self.calls += 1
         time.sleep(2.5)
         return True
-
-
-class _CaptureCodePackageSql(BasicFakeSQL):
-    def __init__(self) -> None:
-        self.query_statements: list[str] = []
-        self.execute_statements: list[str] = []
-
-    def query(self, statement: str, params: list[object] | None = None) -> dict[str, object]:
-        _ = params
-        self.query_statements.append(statement)
-        if "SELECT TOP 1 id FROM codepackage_name" in statement:
-            return {"result": {"data": [{"id": 9}]}}
-        if "SELECT TOP 1 codepackage_id, version FROM codepackage" in statement:
-            return {"result": {"data": [{"codepackage_id": 9, "version": 1}]}}
-        return {"result": {"data": []}}
-
-    def execute(
-        self,
-        statement: str,
-        params: list[object] | None = None,
-        *,
-        dry_run: bool = False,
-    ) -> dict[str, object]:
-        _ = params
-        _ = dry_run
-        self.execute_statements.append(statement)
-        return {"ok": True}
 
 
 def test_compatibility_matrix_strict_canonical_sql_query(monkeypatch: object) -> None:
@@ -582,14 +549,14 @@ def test_compatibility_matrix_modbus_delete_requires_only_identity(
     assert result["action"] == "deleteInput"
 
 
-def test_compatibility_matrix_delete_transform_preflight_valid_without_service_name(
+def test_compatibility_matrix_delete_integration_tables_preflight_valid(
     monkeypatch: object,
 ) -> None:
     server = _make_server(monkeypatch)
 
     result = server.tools["validate_connector_payloads"](
-        action="deleteTransform",
-        payload={"transformName": "normalize_energy_data"},
+        action="deleteIntegrationTables",
+        payload={"tableNames": ["normalize_energy_data"]},
     )
 
     assert result["summary"]["all_valid"] is True
@@ -1031,153 +998,6 @@ def test_compatibility_matrix_connector_preflight_batch_mixed(monkeypatch: objec
     ]
 
 
-def test_compatibility_matrix_transform_methods_require_output_fields_and_mapping(
-    monkeypatch: object,
-) -> None:
-    server = _make_server(monkeypatch)
-
-    result = server.tools["validate_connector_payloads"](
-        action="createTransform",
-        payload={
-            "transformName": "typed_asset01",
-            "serviceName": "javascript",
-            "transformActions": [
-                {
-                    "inputFields": ["source_payload"],
-                    "transformStepMethod": "jsonToDifferentTableFields",
-                    "transformParams": {},
-                }
-            ],
-        },
-    )
-
-    assert result["summary"]["all_valid"] is False
-    issues = result["results"][0]["errors"]
-    assert any(issue["path"].endswith(".outputFields") for issue in issues)
-    assert any(
-        issue["path"].endswith(".transformParams.mapOfPropertiesToFields") for issue in issues
-    )
-
-
-def test_compatibility_matrix_transform_preflight_rejects_unknown_step_method(
-    monkeypatch: object,
-) -> None:
-    server = _make_server(monkeypatch)
-
-    result = server.tools["validate_connector_payloads"](
-        action="createTransform",
-        payload={
-            "transformName": "bad_method_asset01",
-            "serviceName": "javascript",
-            "transformActions": [
-                {
-                    "inputFields": ["source_payload"],
-                    "transformStepMethod": "jsonTransform",
-                    "transformParams": {},
-                }
-            ],
-        },
-    )
-
-    assert result["summary"]["all_valid"] is False
-    issues = result["results"][0]["errors"]
-    step_method_issue = next(
-        issue for issue in issues if issue["path"].endswith(".transformStepMethod")
-    )
-    assert step_method_issue["reason"] == "invalid_enum"
-    assert "javascript" in step_method_issue["allowed_values"]
-
-
-def test_compatibility_matrix_transform_write_validation_error_is_actionable(
-    monkeypatch: object,
-) -> None:
-    server = _make_server(monkeypatch)
-
-    with pytest.raises(ValidationFailure) as exc:
-        server.tools["create_transform"](
-            payload={
-                "transformName": "bad_method_asset01",
-                "serviceName": "javascript",
-                "transformActions": [
-                    {
-                        "inputFields": ["source_payload"],
-                        "transformStepMethod": "jsonTransform",
-                        "transformParams": {},
-                    }
-                ],
-            },
-            confirm_write=True,
-        )
-
-    assert "payload.transformActions[0].transformStepMethod" in exc.value.message
-    assert "invalid_enum" in exc.value.message
-
-
-def test_compatibility_matrix_transform_preflight_accepts_inline_script(
-    monkeypatch: object,
-) -> None:
-    server = _make_server(monkeypatch)
-
-    result = server.tools["validate_connector_payloads"](
-        action="createTransform",
-        payload={
-            "transformName": "inline_decode_asset01",
-            "serviceName": "javascript",
-            "transformActions": [
-                {
-                    "transformService": "v8TransformService",
-                    "inputFields": ["*"],
-                    "transformStepMethod": "javascript",
-                    "outputFields": ["*"],
-                    "transformParams": {
-                        "script": "function transform(row){ return row; }",
-                    },
-                }
-            ],
-        },
-    )
-
-    assert result["summary"]["all_valid"] is True
-    normalized_params = result["results"][0]["normalized_payload"]["transformActions"][0][
-        "transformParams"
-    ]
-    assert normalized_params["codeType"] == "integrationTableTransform"
-
-
-def test_compatibility_matrix_transform_preflight_rejects_unknown_code_type(
-    monkeypatch: object,
-) -> None:
-    server = _make_server(monkeypatch)
-
-    result = server.tools["validate_connector_payloads"](
-        action="createTransform",
-        payload={
-            "transformName": "bad_type_asset01",
-            "serviceName": "javascript",
-            "transformActions": [
-                {
-                    "transformService": "v8TransformService",
-                    "inputFields": ["*"],
-                    "transformStepMethod": "javascript",
-                    "outputFields": ["*"],
-                    "transformParams": {
-                        "codeName": "decode_mixing_tank",
-                        "codeType": "badType",
-                    },
-                }
-            ],
-        },
-    )
-
-    assert result["summary"]["all_valid"] is False
-    issues = result["results"][0]["errors"]
-    code_type_issue = next(
-        issue for issue in issues if issue["path"].endswith(".transformParams.codeType")
-    )
-    assert code_type_issue["reason"] == "invalid_enum"
-    assert "integrationTableTransform" in code_type_issue["allowed_values"]
-
-
 def test_compatibility_matrix_modbus_divisor_sets_divide_by_integer(monkeypatch: object) -> None:
     _fake_class, server_module = load_server_module(monkeypatch)
     connector_adapter = _CaptureConnectors()
@@ -1217,101 +1037,6 @@ def test_compatibility_matrix_modbus_divisor_sets_divide_by_integer(monkeypatch:
     assert forwarded_property_map["modbusConvertToFloat"] == "divideByInteger"
     assert forwarded_property_map["modbusDivisor"] == 10
     assert forwarded_property_map["modbusRegisterType"] == "int16SignedAB"
-
-
-def test_compatibility_matrix_transform_action_name_alias_normalized(monkeypatch: object) -> None:
-    _fake_class, server_module = load_server_module(monkeypatch)
-
-    class _CaptureTransformConnector:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, object]]] = []
-
-        def create_transform(self, payload: dict[str, object]) -> dict[str, object]:
-            self.calls.append(("createTransform", payload))
-            return {"action": "createTransform", "payload": payload}
-
-    connector_adapter = _CaptureTransformConnector()
-
-    with patched_adapters(
-        server_module,
-        table_adapter=BasicFakeTables(),
-        sql_adapter=BasicFakeSQL(),
-        connector_adapter=connector_adapter,
-    ):
-        server = server_module.create_server(_config(), client_factory=lambda _config: object())
-
-    result = server.tools["create_transform"](
-        payload={
-            "transformName": "typed_asset01",
-            "serviceName": "javascript",
-            "transformActions": [
-                {
-                    "inputFields": ["source_payload"],
-                    "transformActionName": "jsonToTableFields",
-                    "outputFields": ["*"],
-                    "transformParams": {
-                        "mapOfPropertiesToFields": [
-                            {
-                                "recordPath": "source_payload.temperature",
-                                "fieldName": "temperature",
-                            }
-                        ]
-                    },
-                }
-            ],
-        },
-        confirm_write=True,
-    )
-
-    assert result["action"] == "createTransform"
-    _action, forwarded_payload = connector_adapter.calls[-1]
-    step_method = forwarded_payload["transformActions"][0]["transformStepMethod"]
-    assert step_method == "jsonToTableFields"
-
-
-def test_compatibility_matrix_transform_service_moved_to_action_scope(
-    monkeypatch: object,
-) -> None:
-    _fake_class, server_module = load_server_module(monkeypatch)
-
-    class _CaptureTransformConnector:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, object]]] = []
-
-        def create_transform(self, payload: dict[str, object]) -> dict[str, object]:
-            self.calls.append(("createTransform", payload))
-            return {"action": "createTransform", "payload": payload}
-
-    connector_adapter = _CaptureTransformConnector()
-
-    with patched_adapters(
-        server_module,
-        table_adapter=BasicFakeTables(),
-        sql_adapter=BasicFakeSQL(),
-        connector_adapter=connector_adapter,
-    ):
-        server = server_module.create_server(_config(), client_factory=lambda _config: object())
-
-    server.tools["create_transform"](
-        payload={
-            "transformName": "decode_asset01",
-            "serviceName": "javascript",
-            "transformService": "v8TransformService",
-            "transformActions": [
-                {
-                    "inputFields": ["*"],
-                    "transformStepMethod": "javascript",
-                    "outputFields": ["*"],
-                    "transformParams": {"codeName": "decode_mixing_tank"},
-                }
-            ],
-        },
-        confirm_write=True,
-    )
-
-    _action, forwarded_payload = connector_adapter.calls[-1]
-    assert "transformService" not in forwarded_payload
-    assert forwarded_payload["transformActions"][0]["transformService"] == "v8TransformService"
 
 
 def test_compatibility_matrix_tool_results_strip_auth_token(monkeypatch: object) -> None:
@@ -1460,28 +1185,46 @@ def test_compatibility_matrix_describe_inputs_lifts_enabled_and_description(
     assert "description" not in first_input["settings"]
 
 
-def test_compatibility_matrix_codepackage_history_status_matches_inactive_rows(
+def test_compatibility_matrix_register_code_package_alters_existing_package(
     monkeypatch: object,
 ) -> None:
     _fake_class, server_module = load_server_module(monkeypatch)
-    sql_adapter = _CaptureCodePackageSql()
+
+    class _CaptureCodePackageConnector:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def describe_code_packages(self, payload: dict[str, object]) -> dict[str, object]:
+            self.calls.append(("describeCodePackages", payload))
+            return {"result": {"data": [{"codeName": "decode_mixing_tank"}]}}
+
+        def create_code_package(self, payload: dict[str, object]) -> dict[str, object]:
+            self.calls.append(("createCodePackage", payload))
+            return {"result": {}, "errorCode": 0, "errorMessage": ""}
+
+        def alter_code_package(self, payload: dict[str, object]) -> dict[str, object]:
+            self.calls.append(("alterCodePackage", payload))
+            return {"result": {}, "errorCode": 0, "errorMessage": ""}
+
+    connector_adapter = _CaptureCodePackageConnector()
 
     with patched_adapters(
         server_module,
         table_adapter=BasicFakeTables(),
-        sql_adapter=sql_adapter,
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
     ):
         server = server_module.create_server(_config(), client_factory=lambda _config: object())
 
-    result = server.tools["register_code_package"](
+    server.tools["register_code_package"](
         code_name="decode_mixing_tank",
         code="function transform(row){ return row; }",
         confirm_write=True,
     )
 
-    assert result["result"]["version"] == 2
-    assert any(
-        "UPDATE codepackage_history SET active = 0, status = 'inactive' WHERE codepackage_id = 9"
-        in statement
-        for statement in sql_adapter.execute_statements
-    )
+    action_names = [action for action, _payload in connector_adapter.calls]
+    assert action_names == ["describeCodePackages", "alterCodePackage"]
+    _action, alter_payload = connector_adapter.calls[-1]
+    assert alter_payload["codeName"] == "decode_mixing_tank"
+    assert alter_payload["codeType"] == "integrationTableTransform"
+

@@ -107,11 +107,11 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
     create_output = adapter.create_output({"connectorName": "mqtt_1"})
     alter_output = adapter.alter_output({"connectorName": "mqtt_1"})
     delete_output = adapter.delete_output({"connectorName": "mqtt_1"})
-    transforms = adapter.list_transforms({"connectorNameLike": "xform%"})
-    transform_detail = adapter.describe_transforms({"connectorNames": ["xform_1"]})
-    create_transform = adapter.create_transform({"connectorName": "xform_1"})
-    alter_transform = adapter.alter_transform({"connectorName": "xform_1"})
-    delete_transform = adapter.delete_transform({"connectorName": "xform_1"})
+    tables = adapter.list_integration_tables({"partialName": "xform"})
+    table_detail = adapter.describe_integration_tables({"tables": [{"tableName": "xform_1"}]})
+    create_table = adapter.create_integration_table({"tableName": "xform_1"})
+    alter_table = adapter.alter_integration_table({"tableName": "xform_1"})
+    delete_tables = adapter.delete_integration_tables({"tableNames": ["xform_1"]})
 
     assert inputs["action"] == "listInputs"
     assert input_detail["action"] == "describeInputs"
@@ -123,11 +123,11 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
     assert create_output["action"] == "createOutput"
     assert alter_output["action"] == "alterOutput"
     assert delete_output["action"] == "deleteOutput"
-    assert transforms["action"] == "listTransforms"
-    assert transform_detail["action"] == "describeTransforms"
-    assert create_transform["action"] == "createTransform"
-    assert alter_transform["action"] == "alterTransform"
-    assert delete_transform["action"] == "deleteTransform"
+    assert tables["action"] == "listIntegrationTables"
+    assert table_detail["action"] == "describeIntegrationTables"
+    assert create_table["action"] == "createIntegrationTable"
+    assert alter_table["action"] == "alterIntegrationTable"
+    assert delete_tables["action"] == "deleteIntegrationTables"
     assert client.calls == [
         ("hub:listInputs", {"inputNameLike": "modbus%"}),
         ("hub:describeInputs", {"inputNames": ["modbus_1"]}),
@@ -139,11 +139,40 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
         ("hub:createOutput", {"connectorName": "mqtt_1"}),
         ("hub:alterOutput", {"connectorName": "mqtt_1"}),
         ("hub:deleteOutput", {"connectorName": "mqtt_1"}),
-        ("hub:listTransforms", {"connectorNameLike": "xform%"}),
-        ("hub:describeTransforms", {"connectorNames": ["xform_1"]}),
-        ("hub:createTransform", {"connectorName": "xform_1"}),
-        ("hub:alterTransform", {"connectorName": "xform_1"}),
-        ("hub:deleteTransform", {"connectorName": "xform_1"}),
+        ("hub:listIntegrationTables", {"partialName": "xform"}),
+        ("hub:describeIntegrationTables", {"tables": [{"tableName": "xform_1"}]}),
+        ("hub:createIntegrationTable", {"tableName": "xform_1"}),
+        ("hub:alterIntegrationTable", {"tableName": "xform_1"}),
+        ("hub:deleteIntegrationTables", {"tableNames": ["xform_1"]}),
+    ]
+
+
+def test_connector_adapter_calls_expected_admin_actions_for_code_packages() -> None:
+    client = StubClient()
+    adapter = ConnectorAdapter(cast(Any, client))
+
+    created = adapter.create_code_package({"codeName": "decode_asset"})
+    altered = adapter.alter_code_package({"codeName": "decode_asset"})
+    cloned = adapter.clone_code_package(
+        {"codeName": "decode_asset", "newCodeName": "decode_asset_v2"}
+    )
+    reverted = adapter.revert_code_package({"codeName": "decode_asset", "version": 1})
+    listed = adapter.list_code_packages({"partialName": "decode"})
+    described = adapter.describe_code_packages({"codeNames": ["decode_asset"]})
+
+    assert created["action"] == "createCodePackage"
+    assert altered["action"] == "alterCodePackage"
+    assert cloned["action"] == "cloneCodePackage"
+    assert reverted["action"] == "revertCodePackage"
+    assert listed["action"] == "listCodePackages"
+    assert described["action"] == "describeCodePackages"
+    assert client.calls == [
+        ("admin:createCodePackage", {"codeName": "decode_asset"}),
+        ("admin:alterCodePackage", {"codeName": "decode_asset"}),
+        ("admin:cloneCodePackage", {"codeName": "decode_asset", "newCodeName": "decode_asset_v2"}),
+        ("admin:revertCodePackage", {"codeName": "decode_asset", "version": 1}),
+        ("admin:listCodePackages", {"partialName": "decode"}),
+        ("admin:describeCodePackages", {"codeNames": ["decode_asset"]}),
     ]
 
 
@@ -191,6 +220,7 @@ def test_connector_adapter_translates_modbus_input_payload_to_settings_shape() -
                     "modbusProtocol": "TCP",
                     "modbusServer": "127.0.0.1",
                     "modbusServerPort": 502,
+                    "modbusDataAddressType": "zeroBased",
                     "propertyMapList": [
                         {
                             "propertyPath": "temperature",
@@ -273,6 +303,7 @@ def test_connector_adapter_preserves_enabled_and_description_top_level_for_modbu
                 "settings": {
                     "enabled": False,
                     "description": "Boiler room telemetry",
+                    "modbusDataAddressType": "zeroBased",
                     "propertyMapList": [
                         {
                             "propertyPath": "temperature",

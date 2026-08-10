@@ -50,6 +50,8 @@ _MODBUS_DATA_TYPE_ENUM = [
     "bitBoolean",
 ]
 
+# Full codeType enum accepted by listCodePackages' codeTypeFilter, per
+# https://documentation.faircom.com/en_US/code-packages-api-actions/listcodepackages
 _CODE_PACKAGE_TYPE_ENUM = [
     "integrationTableTransform",
     "expression",
@@ -60,6 +62,22 @@ _CODE_PACKAGE_TYPE_ENUM = [
     "beforeTrigger",
     "afterTrigger",
     "job",
+]
+
+# createCodePackage/alterCodePackage only accept this narrower subset, per
+# https://documentation.faircom.com/en_US/code-packages-api-actions/createcodepackage
+_CODE_PACKAGE_CREATE_TYPE_ENUM = [
+    "integrationTableTransform",
+    "getRecordsTransform",
+]
+
+# transformSteps.transformStepMethod enum, per
+# https://documentation.faircom.com/en_US/integration-tables-api-actions/createintegrationtable
+_TRANSFORM_STEP_METHOD_ENUM = [
+    "javascript",
+    "jsonToDifferentTableFields",
+    "jsonToTableFields",
+    "tableFieldsToJson",
 ]
 
 _MODBUS_ALLOWED_PAYLOAD_KEYS = {
@@ -205,7 +223,10 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
                         },
                         "modbusDataLen": {
                             "type": ["integer", "number"],
-                            "description": "Length in bytes for the selected modbusDataType.",
+                            "description": (
+                                "Number of 2-byte registers for the value: 1 for 16-bit "
+                                "types, 2 for 32-bit types (e.g. float32ABCD)."
+                            ),
                         },
                         "modbusUnitId": {"type": ["integer", "number"]},
                         "modbusConvertToFloat": {"type": "string"},
@@ -225,6 +246,7 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "modbusProtocol": "TCP",
             "modbusServer": "127.0.0.1",
             "modbusServerPort": 502,
+            "modbusDataAddressType": "zeroBased",
             "unitId": 1,
             "propertyMapList": [
                 {
@@ -232,14 +254,14 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
                     "modbusDataAddress": 1199,
                     "modbusDataAccess": "holdingregister",
                     "modbusDataType": "int16SignedAB",
-                    "modbusDataLen": 2,
+                    "modbusDataLen": 1,
                 },
                 {
                     "propertyName": "vibration",
                     "modbusDataAddress": 1200,
                     "modbusDataAccess": "holdingregister",
                     "modbusDataType": "float32ABCD",
-                    "modbusDataLen": 4,
+                    "modbusDataLen": 2,
                 },
             ],
         },
@@ -256,57 +278,6 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             "connectorName": "mqtt_telemetry_input",
             "serviceName": "mqtt",
             "topic": "factory/line-1/telemetry",
-        },
-    },
-    "javascript": {
-        "service_name": "javascript",
-        "required": ["transformName", "serviceName", "transformActions"],
-        "description": "JavaScript transform payload profile for Edge transform actions.",
-        "properties": {
-            "transformName": {"type": "string", "minLength": 1},
-            "serviceName": {"type": "string", "const": "javascript"},
-            "description": {"type": "string"},
-            "transformActions": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "transformService": {
-                            "type": "string",
-                            "const": "v8TransformService",
-                        },
-                        "inputFields": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "transformStepMethod": {"type": "string", "minLength": 1},
-                        # Deprecated spelling accepted by Edge for compatibility.
-                        "transformActionName": {"type": "string", "minLength": 1},
-                        "outputFields": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "transformParams": {"type": "object"},
-                    },
-                },
-            },
-        },
-        "example": {
-            "transformName": "add_asset_id",
-            "serviceName": "javascript",
-            "transformActions": [
-                {
-                    "transformService": "v8TransformService",
-                    "inputFields": ["*"],
-                    "transformStepMethod": "javascript",
-                    "outputFields": ["*"],
-                    "transformParams": {
-                        "codeName": "decode_mixing_tank",
-                        "codeType": "integrationTableTransform",
-                    },
-                }
-            ],
         },
     },
 }
@@ -402,7 +373,7 @@ def create_server(
     def _connector_target_name(payload: object) -> str | None:
         if not isinstance(payload, dict):
             return None
-        for key in ("connectorName", "inputName", "transformName"):
+        for key in ("connectorName", "inputName", "tableName", "codeName"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -886,7 +857,7 @@ def create_server(
 
         payload_data = dict(payload)
 
-        if action in {"deleteInput", "deleteOutput", "deleteTransform"}:
+        if action in {"deleteInput", "deleteOutput", "deleteIntegrationTables"}:
             if action == "deleteInput":
                 input_name = payload_data.get("inputName")
                 connector_name = payload_data.get("connectorName")
@@ -928,13 +899,9 @@ def create_server(
                         "warnings": [],
                     }
             else:
-                transform_name = payload_data.get("transformName")
-                connector_name = payload_data.get("connectorName")
-                has_identifier = (
-                    isinstance(transform_name, str)
-                    and bool(transform_name.strip())
-                    or isinstance(connector_name, str)
-                    and bool(connector_name.strip())
+                table_names = payload_data.get("tableNames")
+                has_identifier = isinstance(table_names, list) and any(
+                    isinstance(name, str) and name.strip() for name in table_names
                 )
                 if not has_identifier:
                     return {
@@ -945,9 +912,7 @@ def create_server(
                                 "path": "payload",
                                 "json_pointer": "/payload",
                                 "reason": "required",
-                                "message": (
-                                    "deleteTransform requires transformName or connectorName"
-                                ),
+                                "message": "deleteIntegrationTables requires tableNames (array)",
                             }
                         ],
                         "warnings": [],
@@ -984,8 +949,6 @@ def create_server(
             "alterInput",
             "createOutput",
             "alterOutput",
-            "createTransform",
-            "alterTransform",
         }
         modbus_create_or_alter = service_name == "modbus" and action in {
             "createInput",
@@ -1096,193 +1059,6 @@ def create_server(
                             details=details,
                         )
                     )
-
-        if service_name == "javascript" and action in {"createTransform", "alterTransform"}:
-            root_transform_service = payload.get("transformService")
-            transform_actions = payload.get("transformActions")
-            if isinstance(transform_actions, list):
-                for index, action_entry in enumerate(transform_actions):
-                    if not isinstance(action_entry, dict):
-                        continue
-
-                    action_transform_service = action_entry.get("transformService")
-                    effective_transform_service = action_transform_service
-                    has_action_transform_service = isinstance(
-                        effective_transform_service, str
-                    ) and bool(effective_transform_service.strip())
-                    if not has_action_transform_service:
-                        effective_transform_service = root_transform_service
-
-                    has_root_transform_service = isinstance(root_transform_service, str) and bool(
-                        root_transform_service.strip()
-                    )
-                    has_action_transform_service = isinstance(
-                        action_transform_service, str
-                    ) and bool(action_transform_service.strip())
-                    if has_root_transform_service and not has_action_transform_service:
-                        warnings.append(
-                            "payload.transformService is deprecated for javascript transforms; "
-                            "provide transformService per action under payload.transformActions[]."
-                        )
-
-                    step_method_raw = action_entry.get("transformStepMethod")
-                    if not isinstance(step_method_raw, str) or not step_method_raw.strip():
-                        step_method_raw = action_entry.get("transformActionName")
-                    step_method = (
-                        step_method_raw.strip()
-                        if isinstance(step_method_raw, str) and step_method_raw.strip()
-                        else None
-                    )
-                    if step_method not in {
-                        "javascript",
-                        "jsonToDifferentTableFields",
-                        "jsonToTableFields",
-                    }:
-                        errors.append(
-                            _enum_error(
-                                path=f"payload.transformActions[{index}].transformStepMethod",
-                                message=(
-                                    "transformStepMethod must be one of javascript, "
-                                    "jsonToTableFields, or jsonToDifferentTableFields"
-                                ),
-                                allowed_values=[
-                                    "javascript",
-                                    "jsonToTableFields",
-                                    "jsonToDifferentTableFields",
-                                ],
-                                reason="invalid_enum",
-                                received=step_method_raw,
-                            )
-                        )
-                        continue
-
-                    if step_method == "javascript":
-                        if (
-                            not isinstance(effective_transform_service, str)
-                            or effective_transform_service.strip() != "v8TransformService"
-                        ):
-                            errors.append(
-                                _validation_error(
-                                    path=f"payload.transformActions[{index}].transformService",
-                                    reason="required",
-                                    message=(
-                                        "transformService='v8TransformService' is required "
-                                        "for javascript transform steps"
-                                    ),
-                                )
-                            )
-
-                        transform_params = action_entry.get("transformParams")
-                        code_name = (
-                            transform_params.get("codeName")
-                            if isinstance(transform_params, dict)
-                            else None
-                        )
-                        inline_script = (
-                            transform_params.get("script")
-                            if isinstance(transform_params, dict)
-                            else None
-                        )
-                        inline_code = (
-                            transform_params.get("code")
-                            if isinstance(transform_params, dict)
-                            else None
-                        )
-                        has_code_name = isinstance(code_name, str) and bool(code_name.strip())
-                        has_inline_code = (
-                            isinstance(inline_script, str) and bool(inline_script.strip())
-                        ) or (isinstance(inline_code, str) and bool(inline_code.strip()))
-                        if not has_code_name and not has_inline_code:
-                            errors.append(
-                                _validation_error(
-                                    path=(
-                                        "payload.transformActions"
-                                        f"[{index}].transformParams.codeName"
-                                    ),
-                                    reason="required",
-                                    message=(
-                                        "Provide transformParams.codeName or inline "
-                                        "transformParams.script/code for javascript "
-                                        "transform steps."
-                                    ),
-                                )
-                            )
-
-                        code_type = (
-                            transform_params.get("codeType")
-                            if isinstance(transform_params, dict)
-                            else None
-                        )
-                        if isinstance(code_type, str) and code_type.strip():
-                            normalized_code_type = code_type.strip()
-                            if normalized_code_type not in _CODE_PACKAGE_TYPE_ENUM:
-                                errors.append(
-                                    _enum_error(
-                                        path=(
-                                            "payload.transformActions"
-                                            f"[{index}].transformParams.codeType"
-                                        ),
-                                        message=(
-                                            "transformParams.codeType must be a supported "
-                                            "FairCom code package type"
-                                        ),
-                                        allowed_values=_CODE_PACKAGE_TYPE_ENUM,
-                                        reason="invalid_enum",
-                                        received=code_type,
-                                    )
-                                )
-                        continue
-
-                    output_fields = action_entry.get("outputFields")
-                    if not isinstance(output_fields, list) or not output_fields:
-                        errors.append(
-                            _validation_error(
-                                path=f"payload.transformActions[{index}].outputFields",
-                                reason="required",
-                                message=(
-                                    "outputFields is required for transformStepMethod "
-                                    f"{step_method}"
-                                ),
-                                details={
-                                    "corrected_snippet": {
-                                        "outputFields": ["*"],
-                                    }
-                                },
-                            )
-                        )
-
-                    transform_params = action_entry.get("transformParams")
-                    map_of_properties = (
-                        transform_params.get("mapOfPropertiesToFields")
-                        if isinstance(transform_params, dict)
-                        else None
-                    )
-                    if not isinstance(map_of_properties, list) or not map_of_properties:
-                        errors.append(
-                            _validation_error(
-                                path=(
-                                    "payload.transformActions"
-                                    f"[{index}].transformParams.mapOfPropertiesToFields"
-                                ),
-                                reason="required",
-                                message=(
-                                    "transformParams.mapOfPropertiesToFields is required for "
-                                    f"transformStepMethod {step_method}"
-                                ),
-                                details={
-                                    "corrected_snippet": {
-                                        "transformParams": {
-                                            "mapOfPropertiesToFields": [
-                                                {
-                                                    "recordPath": "source_payload.temperature",
-                                                    "fieldName": "temperature",
-                                                }
-                                            ]
-                                        }
-                                    }
-                                },
-                            )
-                        )
 
         if modbus_create_or_alter:
             for key in payload:
@@ -1611,19 +1387,11 @@ def create_server(
 
         normalized_payload = dict(payload)
         is_input_action = action in {"createInput", "alterInput", "deleteInput"}
-        is_transform_action = action in {"createTransform", "alterTransform", "deleteTransform"}
         connector_name = normalized_payload.get("connectorName")
         if (not isinstance(connector_name, str) or not connector_name.strip()) and is_input_action:
             input_name = normalized_payload.get("inputName")
             if isinstance(input_name, str) and input_name.strip():
                 connector_name = input_name.strip()
-                normalized_payload["connectorName"] = connector_name
-        if (
-            not isinstance(connector_name, str) or not connector_name.strip()
-        ) and is_transform_action:
-            transform_name = normalized_payload.get("transformName")
-            if isinstance(transform_name, str) and transform_name.strip():
-                connector_name = transform_name.strip()
                 normalized_payload["connectorName"] = connector_name
 
         if not isinstance(connector_name, str) or not connector_name.strip():
@@ -1634,15 +1402,13 @@ def create_server(
                     "payload": "object (required)",
                     "payload.connectorName": "string (required)",
                     "payload.inputName": "string (accepted alias for input actions)",
-                    "payload.transformName": "string (accepted alias for transform actions)",
                     "confirm_write": "true for non-dry-run changes",
                     "dry_run": "true to preview change",
                 },
                 received_args={"payload": payload, "action": action},
                 suggested_fix=(
                     "Provide payload.connectorName with a non-empty connector name. "
-                    "For input actions, payload.inputName is also accepted. "
-                    "For transform actions, payload.transformName is also accepted."
+                    "For input actions, payload.inputName is also accepted."
                 ),
                 example_payload={
                     "name": tool_name,
@@ -1658,10 +1424,6 @@ def create_server(
             input_name = normalized_payload.get("inputName")
             if not isinstance(input_name, str) or not input_name.strip():
                 normalized_payload["inputName"] = connector_name
-        if is_transform_action:
-            transform_name = normalized_payload.get("transformName")
-            if not isinstance(transform_name, str) or not transform_name.strip():
-                normalized_payload["transformName"] = connector_name
 
         service_name = normalized_payload.get("serviceName")
         if isinstance(service_name, str) and service_name.strip().lower() == "modbus":
@@ -1728,82 +1490,6 @@ def create_server(
                     normalized_entries.append(normalized_entry)
 
                 normalized_payload["propertyMapList"] = normalized_entries
-
-        if isinstance(service_name, str) and service_name.strip().lower() == "javascript":
-            root_transform_service = normalized_payload.get("transformService")
-            normalized_root_transform_service = None
-            if isinstance(root_transform_service, str) and root_transform_service.strip():
-                normalized_root_transform_service = root_transform_service.strip()
-
-            transform_actions = normalized_payload.get("transformActions")
-            if isinstance(transform_actions, list):
-                normalized_actions: list[dict[str, object]] = []
-                for action_entry in transform_actions:
-                    if not isinstance(action_entry, dict):
-                        normalized_actions.append(action_entry)
-                        continue
-                    normalized_action = dict(action_entry)
-                    step_method = normalized_action.get("transformStepMethod")
-                    action_name = normalized_action.get("transformActionName")
-                    if (
-                        (not isinstance(step_method, str) or not step_method.strip())
-                        and isinstance(action_name, str)
-                        and action_name.strip()
-                    ):
-                        normalized_action["transformStepMethod"] = action_name.strip()
-                    elif isinstance(step_method, str) and step_method.strip():
-                        normalized_action["transformStepMethod"] = step_method.strip()
-
-                    action_transform_service = normalized_action.get("transformService")
-                    if (
-                        isinstance(action_transform_service, str)
-                        and action_transform_service.strip()
-                    ):
-                        normalized_action["transformService"] = action_transform_service.strip()
-                    elif normalized_root_transform_service is not None:
-                        normalized_action["transformService"] = normalized_root_transform_service
-
-                    transform_params = normalized_action.get("transformParams")
-                    if isinstance(transform_params, dict):
-                        normalized_transform_params = dict(transform_params)
-                        code_name = normalized_transform_params.get("codeName")
-                        if isinstance(code_name, str) and code_name.strip():
-                            normalized_transform_params["codeName"] = code_name.strip()
-
-                        code_type = normalized_transform_params.get("codeType")
-                        if isinstance(code_type, str) and code_type.strip():
-                            normalized_transform_params["codeType"] = code_type.strip()
-
-                        script_value = normalized_transform_params.get("script")
-                        if isinstance(script_value, str) and script_value.strip():
-                            normalized_transform_params["script"] = script_value.strip()
-
-                        code_value = normalized_transform_params.get("code")
-                        if isinstance(code_value, str) and code_value.strip():
-                            normalized_transform_params["code"] = code_value.strip()
-
-                        has_code_name = isinstance(
-                            normalized_transform_params.get("codeName"), str
-                        ) and bool(cast(str, normalized_transform_params.get("codeName")).strip())
-                        has_inline_code = isinstance(
-                            normalized_transform_params.get("script"), str
-                        ) and bool(cast(str, normalized_transform_params.get("script")).strip())
-                        has_inline_code = has_inline_code or (
-                            isinstance(normalized_transform_params.get("code"), str)
-                            and bool(cast(str, normalized_transform_params.get("code")).strip())
-                        )
-                        if (has_code_name or has_inline_code) and not isinstance(
-                            normalized_transform_params.get("codeType"), str
-                        ):
-                            normalized_transform_params["codeType"] = "integrationTableTransform"
-
-                        normalized_action["transformParams"] = normalized_transform_params
-
-                    normalized_actions.append(normalized_action)
-                normalized_payload["transformActions"] = normalized_actions
-
-            # Action-level transformService is canonical for forwarding and validation.
-            normalized_payload.pop("transformService", None)
 
         validation = _validate_connector_schema(
             tool_name=tool_name,
@@ -3171,24 +2857,127 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="list_transforms")
-    def list_transforms(payload: dict[str, object] | None = None) -> object:
+    def _require_table_payload(
+        *,
+        tool_name: str,
+        payload: dict[str, object] | None,
+        require_table_names: bool = False,
+    ) -> dict[str, object]:
+        if payload is None or not isinstance(payload, dict) or not payload:
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="payload is required",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={"payload": payload},
+                suggested_fix="Provide a non-empty integration table payload object.",
+                example_payload={
+                    "name": tool_name,
+                    "arguments": {"payload": {"tableName": "modbus_factory_floor_raw"}},
+                },
+            )
+        if require_table_names:
+            table_names = payload.get("tableNames")
+            if not isinstance(table_names, list) or not any(
+                isinstance(name, str) and name.strip() for name in table_names
+            ):
+                raise _validation_failure(
+                    tool_name=tool_name,
+                    message="payload.tableNames is required and must be a non-empty array",
+                    expected_args={"payload.tableNames": "array of string (required)"},
+                    received_args={"payload": payload},
+                    suggested_fix="Provide payload.tableNames as a non-empty array of table names.",
+                    example_payload={
+                        "name": tool_name,
+                        "arguments": {"payload": {"tableNames": ["modbus_factory_floor_raw"]}},
+                    },
+                )
+        else:
+            table_name = payload.get("tableName")
+            if not isinstance(table_name, str) or not table_name.strip():
+                raise _validation_failure(
+                    tool_name=tool_name,
+                    message="payload.tableName is required",
+                    expected_args={"payload.tableName": "string (required)"},
+                    received_args={"payload": payload},
+                    suggested_fix="Provide payload.tableName with a non-empty table name.",
+                    example_payload={
+                        "name": tool_name,
+                        "arguments": {"payload": {"tableName": "modbus_factory_floor_raw"}},
+                    },
+                )
+        return dict(payload)
+
+    def _table_write_preview(
+        *,
+        tool_name: str,
+        action: str,
+        payload: dict[str, object] | None,
+        require_table_names: bool = False,
+    ) -> dict[str, object]:
+        try:
+            resolved_payload = _require_table_payload(
+                tool_name=tool_name,
+                payload=payload,
+                require_table_names=require_table_names,
+            )
+        except ValidationFailure as exc:
+            return {
+                "mode": "dry_run",
+                "status": "invalid",
+                "tool_name": tool_name,
+                "action": action,
+                "payload": payload,
+                "execution_status": "not_executed",
+                "preview": "Integration table payload failed local validation",
+                "validation_errors": [
+                    {
+                        "path": "payload",
+                        "json_pointer": "/payload",
+                        "reason": "invalid_arguments",
+                        "message": str(exc.message),
+                    }
+                ],
+                "warnings": [
+                    "Dry run is a local preview only and does not call FairCom backend APIs.",
+                ],
+                "hint": "Fix validation_errors and run dry_run again before confirm_write=True.",
+            }
+        return {
+            "mode": "dry_run",
+            "status": "valid",
+            "tool_name": tool_name,
+            "action": action,
+            "payload": resolved_payload,
+            "execution_status": "not_executed",
+            "preview": "Integration table action would execute",
+            "warnings": [
+                "Dry run is a local preview only and does not call FairCom backend APIs.",
+            ],
+            "hint": "Set confirm_write=true to apply this change.",
+        }
+
+    @server.tool(name="list_integration_tables")
+    def list_integration_tables(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
-            "list_transforms",
+            "list_integration_tables",
             "metadata",
-            lambda: connector_adapter.list_transforms(payload),
+            lambda: connector_adapter.list_integration_tables(payload),
         )
 
-    @server.tool(name="describe_transforms")
-    def describe_transforms(payload: dict[str, object] | None = None) -> object:
+    @server.tool(name="describe_integration_tables")
+    def describe_integration_tables(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
-            "describe_transforms",
+            "describe_integration_tables",
             "metadata",
-            lambda: connector_adapter.describe_transforms(payload),
+            lambda: connector_adapter.describe_integration_tables(payload),
         )
 
-    @server.tool(name="create_transform")
-    def create_transform(
+    @server.tool(name="create_integration_table")
+    def create_integration_table(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
@@ -3196,8 +2985,8 @@ def create_server(
         audit_log.record(
             event_type="connector_write_attempt",
             details={
-                "tool": "create_transform",
-                "action": "createTransform",
+                "tool": "create_integration_table",
+                "action": "createIntegrationTable",
                 "target": _connector_target_name(payload),
                 "dry_run": dry_run,
                 "confirm_write": confirm_write,
@@ -3205,24 +2994,23 @@ def create_server(
         )
         if dry_run:
             return _run_tool(
-                "create_transform",
+                "create_integration_table",
                 "connector",
-                lambda: _connector_preview(
-                    tool_name="create_transform",
-                    action="createTransform",
+                lambda: _table_write_preview(
+                    tool_name="create_integration_table",
+                    action="createIntegrationTable",
                     payload=payload,
                 ),
             )
         try:
-            resolved_payload = _require_connector_payload(
-                tool_name="create_transform",
+            resolved_payload = _require_table_payload(
+                tool_name="create_integration_table",
                 payload=payload,
-                action="createTransform",
             )
             if not confirm_write:
                 raise _validation_failure(
-                    tool_name="create_transform",
-                    message="create_transform requires confirm_write=True",
+                    tool_name="create_integration_table",
+                    message="create_integration_table requires confirm_write=True",
                     expected_args={
                         "payload": "object (required)",
                         "confirm_write": "true for non-dry-run changes",
@@ -3232,33 +3020,32 @@ def create_server(
                         "payload": resolved_payload,
                         "confirm_write": confirm_write,
                         "dry_run": dry_run,
-                        "confirm_write_required": True,
                     },
                     suggested_fix=(
                         "Set confirm_write=true to apply the change or dry_run=true to preview it."
                     ),
                     example_payload={
-                        "name": "create_transform",
-                        "arguments": {"payload": {"connectorName": "demo", "type": "transform"}},
+                        "name": "create_integration_table",
+                        "arguments": {"payload": {"tableName": "modbus_factory_floor_raw"}},
                     },
                     reason_code="missing_write_confirmation",
                 )
         except ValidationFailure as exc:
             _record_connector_validation_rejection(
-                tool_name="create_transform",
-                action="createTransform",
+                tool_name="create_integration_table",
+                action="createIntegrationTable",
                 payload=payload,
                 exc=exc,
             )
             raise
         result = _execute_connector_write(
-            tool_name="create_transform",
-            action="createTransform",
+            tool_name="create_integration_table",
+            action="createIntegrationTable",
             target=_connector_target_name(resolved_payload),
             writer=lambda: _run_tool(
-                "create_transform",
+                "create_integration_table",
                 "connector",
-                lambda: connector_adapter.create_transform(resolved_payload),
+                lambda: connector_adapter.create_integration_table(resolved_payload),
             ),
         )
         if isinstance(result, dict):
@@ -3273,8 +3060,8 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="alter_transform")
-    def alter_transform(
+    @server.tool(name="alter_integration_table")
+    def alter_integration_table(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
@@ -3282,8 +3069,8 @@ def create_server(
         audit_log.record(
             event_type="connector_write_attempt",
             details={
-                "tool": "alter_transform",
-                "action": "alterTransform",
+                "tool": "alter_integration_table",
+                "action": "alterIntegrationTable",
                 "target": _connector_target_name(payload),
                 "dry_run": dry_run,
                 "confirm_write": confirm_write,
@@ -3291,51 +3078,58 @@ def create_server(
         )
         if dry_run:
             return _run_tool(
-                "alter_transform",
+                "alter_integration_table",
                 "connector",
-                lambda: _connector_preview(
-                    tool_name="alter_transform",
-                    action="alterTransform",
+                lambda: _table_write_preview(
+                    tool_name="alter_integration_table",
+                    action="alterIntegrationTable",
                     payload=payload,
                 ),
             )
-        resolved_payload = _require_connector_payload(
-            tool_name="alter_transform",
-            payload=payload,
-            action="alterTransform",
-        )
-        if not confirm_write:
-            raise _validation_failure(
-                tool_name="alter_transform",
-                message="alter_transform requires confirm_write=True",
-                expected_args={
-                    "payload": "object (required)",
-                    "confirm_write": "true for non-dry-run changes",
-                    "dry_run": "true to preview change",
-                },
-                received_args={
-                    "payload": resolved_payload,
-                    "confirm_write": confirm_write,
-                    "dry_run": dry_run,
-                    "confirm_write_required": True,
-                },
-                suggested_fix=(
-                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
-                ),
-                example_payload={
-                    "name": "alter_transform",
-                    "arguments": {"payload": {"connectorName": "demo", "type": "transform"}},
-                },
-                reason_code="missing_write_confirmation",
+        try:
+            resolved_payload = _require_table_payload(
+                tool_name="alter_integration_table",
+                payload=payload,
             )
+            if not confirm_write:
+                raise _validation_failure(
+                    tool_name="alter_integration_table",
+                    message="alter_integration_table requires confirm_write=True",
+                    expected_args={
+                        "payload": "object (required)",
+                        "confirm_write": "true for non-dry-run changes",
+                        "dry_run": "true to preview change",
+                    },
+                    received_args={
+                        "payload": resolved_payload,
+                        "confirm_write": confirm_write,
+                        "dry_run": dry_run,
+                    },
+                    suggested_fix=(
+                        "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                    ),
+                    example_payload={
+                        "name": "alter_integration_table",
+                        "arguments": {"payload": {"tableName": "modbus_factory_floor_raw"}},
+                    },
+                    reason_code="missing_write_confirmation",
+                )
+        except ValidationFailure as exc:
+            _record_connector_validation_rejection(
+                tool_name="alter_integration_table",
+                action="alterIntegrationTable",
+                payload=payload,
+                exc=exc,
+            )
+            raise
         result = _execute_connector_write(
-            tool_name="alter_transform",
-            action="alterTransform",
+            tool_name="alter_integration_table",
+            action="alterIntegrationTable",
             target=_connector_target_name(resolved_payload),
             writer=lambda: _run_tool(
-                "alter_transform",
+                "alter_integration_table",
                 "connector",
-                lambda: connector_adapter.alter_transform(resolved_payload),
+                lambda: connector_adapter.alter_integration_table(resolved_payload),
             ),
         )
         if isinstance(result, dict):
@@ -3350,8 +3144,8 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="delete_transform")
-    def delete_transform(
+    @server.tool(name="delete_integration_tables")
+    def delete_integration_tables(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
@@ -3359,8 +3153,8 @@ def create_server(
         audit_log.record(
             event_type="connector_write_attempt",
             details={
-                "tool": "delete_transform",
-                "action": "deleteTransform",
+                "tool": "delete_integration_tables",
+                "action": "deleteIntegrationTables",
                 "target": _connector_target_name(payload),
                 "dry_run": dry_run,
                 "confirm_write": confirm_write,
@@ -3368,51 +3162,148 @@ def create_server(
         )
         if dry_run:
             return _run_tool(
-                "delete_transform",
+                "delete_integration_tables",
                 "connector",
-                lambda: _connector_preview(
-                    tool_name="delete_transform",
-                    action="deleteTransform",
+                lambda: _table_write_preview(
+                    tool_name="delete_integration_tables",
+                    action="deleteIntegrationTables",
+                    payload=payload,
+                    require_table_names=True,
+                ),
+            )
+        try:
+            resolved_payload = _require_table_payload(
+                tool_name="delete_integration_tables",
+                payload=payload,
+                require_table_names=True,
+            )
+            if not confirm_write:
+                raise _validation_failure(
+                    tool_name="delete_integration_tables",
+                    message="delete_integration_tables requires confirm_write=True",
+                    expected_args={
+                        "payload": "object (required)",
+                        "confirm_write": "true for non-dry-run changes",
+                        "dry_run": "true to preview change",
+                    },
+                    received_args={
+                        "payload": resolved_payload,
+                        "confirm_write": confirm_write,
+                        "dry_run": dry_run,
+                    },
+                    suggested_fix=(
+                        "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                    ),
+                    example_payload={
+                        "name": "delete_integration_tables",
+                        "arguments": {"payload": {"tableNames": ["modbus_factory_floor_raw"]}},
+                    },
+                    reason_code="missing_write_confirmation",
+                )
+        except ValidationFailure as exc:
+            _record_connector_validation_rejection(
+                tool_name="delete_integration_tables",
+                action="deleteIntegrationTables",
+                payload=payload,
+                exc=exc,
+            )
+            raise
+        result = _execute_connector_write(
+            tool_name="delete_integration_tables",
+            action="deleteIntegrationTables",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "delete_integration_tables",
+                "connector",
+                lambda: connector_adapter.delete_integration_tables(resolved_payload),
+            ),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="test_integration_table_transform_steps")
+    def test_integration_table_transform_steps(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={
+                "tool": "test_integration_table_transform_steps",
+                "action": "testIntegrationTableTransformSteps",
+                "target": _connector_target_name(payload),
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
+        )
+        if dry_run:
+            return _run_tool(
+                "test_integration_table_transform_steps",
+                "connector",
+                lambda: _table_write_preview(
+                    tool_name="test_integration_table_transform_steps",
+                    action="testIntegrationTableTransformSteps",
                     payload=payload,
                 ),
             )
-        resolved_payload = _require_connector_payload(
-            tool_name="delete_transform",
-            payload=payload,
-            action="deleteTransform",
-        )
-        if not confirm_write:
-            raise _validation_failure(
-                tool_name="delete_transform",
-                message="delete_transform requires confirm_write=True",
-                expected_args={
-                    "payload": "object (required)",
-                    "confirm_write": "true for non-dry-run changes",
-                    "dry_run": "true to preview change",
-                },
-                received_args={
-                    "payload": resolved_payload,
-                    "confirm_write": confirm_write,
-                    "dry_run": dry_run,
-                    "confirm_write_required": True,
-                },
-                suggested_fix=(
-                    "Set confirm_write=true to apply the change or dry_run=true to preview it."
-                ),
-                example_payload={
-                    "name": "delete_transform",
-                    "arguments": {"payload": {"connectorName": "demo", "type": "transform"}},
-                },
-                reason_code="missing_write_confirmation",
+        try:
+            resolved_payload = _require_table_payload(
+                tool_name="test_integration_table_transform_steps",
+                payload=payload,
             )
+            if not confirm_write:
+                raise _validation_failure(
+                    tool_name="test_integration_table_transform_steps",
+                    message=(
+                        "test_integration_table_transform_steps requires confirm_write=True"
+                    ),
+                    expected_args={
+                        "payload": "object (required)",
+                        "confirm_write": "true for non-dry-run changes",
+                        "dry_run": "true to preview change",
+                    },
+                    received_args={
+                        "payload": resolved_payload,
+                        "confirm_write": confirm_write,
+                        "dry_run": dry_run,
+                    },
+                    suggested_fix=(
+                        "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                    ),
+                    example_payload={
+                        "name": "test_integration_table_transform_steps",
+                        "arguments": {"payload": {"tableName": "modbus_factory_floor_raw"}},
+                    },
+                    reason_code="missing_write_confirmation",
+                )
+        except ValidationFailure as exc:
+            _record_connector_validation_rejection(
+                tool_name="test_integration_table_transform_steps",
+                action="testIntegrationTableTransformSteps",
+                payload=payload,
+                exc=exc,
+            )
+            raise
         result = _execute_connector_write(
-            tool_name="delete_transform",
-            action="deleteTransform",
+            tool_name="test_integration_table_transform_steps",
+            action="testIntegrationTableTransformSteps",
             target=_connector_target_name(resolved_payload),
             writer=lambda: _run_tool(
-                "delete_transform",
+                "test_integration_table_transform_steps",
                 "connector",
-                lambda: connector_adapter.delete_transform(resolved_payload),
+                lambda: connector_adapter.test_integration_table_transform_steps(
+                    resolved_payload
+                ),
             ),
         )
         if isinstance(result, dict):
@@ -3612,26 +3503,56 @@ def create_server(
                     "create_output": ["payload", "confirm_write", "dry_run"],
                     "alter_output": ["payload", "confirm_write", "dry_run"],
                     "delete_output": ["payload", "confirm_write", "dry_run"],
-                    "list_transforms": ["payload"],
-                    "describe_transforms": ["payload"],
-                    "create_transform": ["payload", "confirm_write", "dry_run"],
-                    "alter_transform": ["payload", "confirm_write", "dry_run"],
-                    "delete_transform": ["payload", "confirm_write", "dry_run"],
-                    "list_code_packages": ["name_like", "database_name", "owner_name"],
-                    "describe_code_package": ["code_name", "database_name", "owner_name"],
+                    "list_integration_tables": ["payload"],
+                    "describe_integration_tables": ["payload"],
+                    "create_integration_table": ["payload", "confirm_write", "dry_run"],
+                    "alter_integration_table": ["payload", "confirm_write", "dry_run"],
+                    "delete_integration_tables": ["payload", "confirm_write", "dry_run"],
+                    "test_integration_table_transform_steps": [
+                        "payload",
+                        "confirm_write",
+                        "dry_run",
+                    ],
+                    "list_code_packages": [
+                        "name_like",
+                        "database_name",
+                        "owner_name",
+                        "code_type_filter",
+                        "status_filter",
+                        "max_records",
+                    ],
+                    "describe_code_packages": [
+                        "code_names",
+                        "database_name",
+                        "owner_name",
+                        "code_format",
+                    ],
                     "register_code_package": [
                         "code_name",
                         "code",
                         "code_type",
-                        "language",
-                        "service_name",
-                        "code_format",
+                        "code_status",
                         "database_name",
                         "owner_name",
-                        "created_by",
                         "comment",
                         "description",
                         "metadata",
+                        "confirm_write",
+                        "dry_run",
+                    ],
+                    "clone_code_package": [
+                        "code_name",
+                        "new_code_name",
+                        "database_name",
+                        "owner_name",
+                        "confirm_write",
+                        "dry_run",
+                    ],
+                    "revert_code_package": [
+                        "code_name",
+                        "version",
+                        "database_name",
+                        "owner_name",
                         "confirm_write",
                         "dry_run",
                     ],
@@ -3657,14 +3578,17 @@ def create_server(
                     "create_output": {},
                     "alter_output": {},
                     "delete_output": {},
-                    "list_transforms": {},
-                    "describe_transforms": {},
-                    "create_transform": {},
-                    "alter_transform": {},
-                    "delete_transform": {},
+                    "list_integration_tables": {},
+                    "describe_integration_tables": {},
+                    "create_integration_table": {},
+                    "alter_integration_table": {},
+                    "delete_integration_tables": {},
+                    "test_integration_table_transform_steps": {},
                     "list_code_packages": {},
-                    "describe_code_package": {},
+                    "describe_code_packages": {},
                     "register_code_package": {},
+                    "clone_code_package": {},
+                    "revert_code_package": {},
                     "describe_connector_schema": {},
                     "validate_connector_payloads": {},
                 },
@@ -3693,11 +3617,12 @@ def create_server(
                                 "modbusProtocol": "TCP",
                                 "modbusServer": "127.0.0.1",
                                 "modbusServerPort": 502,
+                                "modbusDataAddressType": "zeroBased",
                                 "propertyMapList": [
                                     {
                                         "modbusDataAccess": "holdingregister",
                                         "modbusDataType": "int16SignedAB",
-                                        "modbusDataLen": 2,
+                                        "modbusDataLen": 1,
                                     }
                                 ],
                             },
@@ -3721,19 +3646,16 @@ def create_server(
                             "confirm_write": True,
                         },
                     },
-                    "create_transform": {
-                        "name": "create_transform",
+                    "create_integration_table": {
+                        "name": "create_integration_table",
                         "arguments": {
                             "payload": {
-                                "transformName": "add_asset_id",
-                                "serviceName": "javascript",
-                                "transformActions": [
+                                "tableName": "modbus_factory_floor_raw",
+                                "transformSteps": [
                                     {
-                                        "transformService": "v8TransformService",
-                                        "inputFields": ["*"],
                                         "transformStepMethod": "javascript",
-                                        "outputFields": ["*"],
-                                        "transformParams": {"codeName": "decode_mixing_tank"},
+                                        "transformStepService": "v8TransformService",
+                                        "codeName": "decode_mixing_tank",
                                     }
                                 ],
                             },
@@ -3748,7 +3670,7 @@ def create_server(
                         "name": "register_code_package",
                         "arguments": {
                             "code_name": "decode_mixing_tank",
-                            "code": "function transform(row){ return row; }",
+                            "code": "record.value = record.source_payload.value;",
                             "code_type": "integrationTableTransform",
                             "confirm_write": True,
                         },
@@ -3769,7 +3691,7 @@ def create_server(
                                         {
                                             "modbusDataAccess": "holdingregister",
                                             "modbusDataType": "int16SignedAB",
-                                            "modbusDataLen": 2,
+                                            "modbusDataLen": 1,
                                         }
                                     ],
                                 }
@@ -3783,7 +3705,7 @@ def create_server(
                     "create_input": "complete",
                     "manage_service": "complete",
                     "create_output": "complete",
-                    "create_transform": "requires_existing_code_package",
+                    "create_integration_table": "requires_existing_code_package",
                     "register_code_package": "complete",
                     "describe_connector_schema": "complete",
                     "validate_connector_payloads": "complete",
@@ -3843,9 +3765,9 @@ def create_server(
             "createOutput",
             "alterOutput",
             "deleteOutput",
-            "createTransform",
-            "alterTransform",
-            "deleteTransform",
+            "createIntegrationTable",
+            "alterIntegrationTable",
+            "deleteIntegrationTables",
             "manageService",
         }
         if normalized_action not in allowed_actions:
@@ -3856,7 +3778,7 @@ def create_server(
                     "action": (
                         "one of createInput/alterInput/deleteInput/"
                         "createOutput/alterOutput/deleteOutput/"
-                        "createTransform/alterTransform/deleteTransform/"
+                        "createIntegrationTable/alterIntegrationTable/deleteIntegrationTables/"
                         "manageService"
                     ),
                     "payload": "object (optional, single preflight)",
@@ -3867,19 +3789,14 @@ def create_server(
                 example_payload={
                     "name": "validate_connector_payloads",
                     "arguments": {
-                        "action": "createTransform",
+                        "action": "createIntegrationTable",
                         "payload": {
-                            "transformName": "inline_decode_asset01",
-                            "serviceName": "javascript",
-                            "transformActions": [
+                            "tableName": "inline_decode_asset01",
+                            "transformSteps": [
                                 {
-                                    "transformService": "v8TransformService",
-                                    "inputFields": ["*"],
                                     "transformStepMethod": "javascript",
-                                    "outputFields": ["*"],
-                                    "transformParams": {
-                                        "script": "function transform(row){ return row; }"
-                                    },
+                                    "transformStepService": "v8TransformService",
+                                    "codeName": "decode_asset01",
                                 }
                             ],
                         },
@@ -3895,7 +3812,7 @@ def create_server(
                     "action": (
                         "one of createInput/alterInput/deleteInput/"
                         "createOutput/alterOutput/deleteOutput/"
-                        "createTransform/alterTransform/deleteTransform/"
+                        "createIntegrationTable/alterIntegrationTable/deleteIntegrationTables/"
                         "manageService"
                     ),
                     "payload": "object (optional, single preflight)",
@@ -3928,7 +3845,7 @@ def create_server(
                     "action": (
                         "one of createInput/alterInput/deleteInput/"
                         "createOutput/alterOutput/deleteOutput/"
-                        "createTransform/alterTransform/deleteTransform"
+                        "createIntegrationTable/alterIntegrationTable/deleteIntegrationTables"
                     ),
                     "payload": "object (optional, single preflight)",
                     "payloads": "array<object> (optional, batch preflight)",
@@ -4080,6 +3997,16 @@ def create_server(
                             tool_name="validate_connector_payloads",
                             payload=item,
                         )
+                    elif normalized_action in {
+                        "createIntegrationTable",
+                        "alterIntegrationTable",
+                        "deleteIntegrationTables",
+                    }:
+                        normalized_payload = _require_table_payload(
+                            tool_name="validate_connector_payloads",
+                            payload=item,
+                            require_table_names=normalized_action == "deleteIntegrationTables",
+                        )
                     else:
                         normalized_payload = _require_connector_payload(
                             tool_name="validate_connector_payloads",
@@ -4113,6 +4040,13 @@ def create_server(
                         "service_name": normalized_payload.get("serviceName"),
                         "warnings": [],
                     }
+                    forwarded_payload = normalized_payload
+                elif normalized_action in {
+                    "createIntegrationTable",
+                    "alterIntegrationTable",
+                    "deleteIntegrationTables",
+                }:
+                    validation = {"service_name": None, "warnings": []}
                     forwarded_payload = normalized_payload
                 else:
                     validation = _validate_connector_schema(
@@ -4156,67 +4090,117 @@ def create_server(
         name_like: str | None = None,
         database_name: str = "faircom",
         owner_name: str = "admin",
+        code_type_filter: list[str] | None = None,
+        status_filter: list[str] | None = None,
+        max_records: int = 200,
     ) -> object:
-        def _sql_quote_literal(value: str) -> str:
-            return "'" + value.replace("'", "''") + "'"
-
-        where_clauses = [
-            f"database_name = {_sql_quote_literal(database_name)}",
-            f"owner_name = {_sql_quote_literal(owner_name)}",
-        ]
+        payload: dict[str, object] = {
+            "databaseName": database_name,
+            "ownerName": owner_name,
+            "maxRecords": max_records,
+        }
         if isinstance(name_like, str) and name_like.strip():
-            where_clauses.append(f"codepackage_name LIKE {_sql_quote_literal(name_like.strip())}")
-        statement = (
-            "SELECT TOP 200 id, codepackage_name, database_name, owner_name "
-            "FROM codepackage_name "
-            f"WHERE {' AND '.join(where_clauses)} "
-            "ORDER BY codepackage_name"
-        )
+            payload["partialName"] = name_like.strip()
+        if code_type_filter:
+            invalid_types = [t for t in code_type_filter if t not in _CODE_PACKAGE_TYPE_ENUM]
+            if invalid_types:
+                raise _validation_failure(
+                    tool_name="list_code_packages",
+                    message="Unsupported code_type_filter value(s)",
+                    expected_args={"code_type_filter": f"subset of {_CODE_PACKAGE_TYPE_ENUM}"},
+                    received_args={"code_type_filter": code_type_filter},
+                    suggested_fix="Use only supported FairCom code package types.",
+                    example_payload={
+                        "name": "list_code_packages",
+                        "arguments": {"code_type_filter": ["integrationTableTransform"]},
+                    },
+                )
+            payload["codeTypeFilter"] = list(code_type_filter)
+        if status_filter:
+            payload["statusFilter"] = list(status_filter)
         return _run_tool(
             "list_code_packages",
             "metadata",
-            lambda: sql_adapter.query(statement),
+            lambda: connector_adapter.list_code_packages(payload),
         )
 
-    @server.tool(name="describe_code_package")
-    def describe_code_package(
-        code_name: str,
+    @server.tool(name="describe_code_packages")
+    def describe_code_packages(
+        code_names: list[str],
         database_name: str = "faircom",
         owner_name: str = "admin",
+        code_format: str = "utf8",
     ) -> object:
-        normalized_code_name = code_name.strip()
-        if not normalized_code_name:
+        normalized_names = [
+            name.strip() for name in code_names if isinstance(name, str) and name.strip()
+        ]
+        if not normalized_names:
             raise _validation_failure(
-                tool_name="describe_code_package",
-                message="code_name is required",
-                expected_args={"code_name": "string (required)"},
-                received_args={"code_name": code_name},
-                suggested_fix="Provide a non-empty code_name.",
+                tool_name="describe_code_packages",
+                message="code_names is required",
+                expected_args={"code_names": "array of string (required)"},
+                received_args={"code_names": code_names},
+                suggested_fix="Provide one or more non-empty code_names.",
                 example_payload={
-                    "name": "describe_code_package",
-                    "arguments": {"code_name": "decode_mixing_tank"},
+                    "name": "describe_code_packages",
+                    "arguments": {"code_names": ["decode_mixing_tank"]},
                 },
             )
-
-        def _sql_quote_literal(value: str) -> str:
-            return "'" + value.replace("'", "''") + "'"
-
-        statement = (
-            "SELECT TOP 1 n.id, n.codepackage_name, n.database_name, n.owner_name, "
-            "c.version, c.active, c.status, c.type, c.language, c.service_name, c.code_format, "
-            "c.created_by, c.updated_by, c.code, c.comment, c.description, c.metadata "
-            "FROM codepackage_name n "
-            "LEFT JOIN codepackage c ON c.codepackage_id = n.id "
-            f"WHERE n.codepackage_name = {_sql_quote_literal(normalized_code_name)} "
-            f"AND n.database_name = {_sql_quote_literal(database_name)} "
-            f"AND n.owner_name = {_sql_quote_literal(owner_name)}"
-        )
-
+        payload = {
+            "databaseName": database_name,
+            "ownerName": owner_name,
+            "codeNames": normalized_names,
+            "codeFormat": code_format,
+        }
         return _run_tool(
-            "describe_code_package",
+            "describe_code_packages",
             "metadata",
-            lambda: sql_adapter.query(statement),
+            lambda: connector_adapter.describe_code_packages(payload),
         )
+
+    def _code_package_exists(
+        *,
+        code_name: str,
+        database_name: str,
+        owner_name: str,
+    ) -> bool:
+        result = connector_adapter.describe_code_packages(
+            {
+                "databaseName": database_name,
+                "ownerName": owner_name,
+                "codeNames": [code_name],
+            }
+        )
+        if not isinstance(result, dict):
+            return False
+        nested = result.get("result")
+        data = nested.get("data") if isinstance(nested, dict) else None
+        return isinstance(data, list) and len(data) > 0
+
+    def _validate_javascript_code(*, tool_name: str, code_name: str, code: str) -> None:
+        try:
+            import esprima  # type: ignore[import-not-found, import-untyped]
+
+            esprima.parseScript(code)
+        except Exception as exc:
+            parser_message = str(exc).strip() or "Unknown JavaScript syntax error"
+            details: dict[str, object] = {"code_name": code_name, "parser_message": parser_message}
+            line_number = getattr(exc, "lineNumber", None)
+            if isinstance(line_number, int):
+                details["line"] = line_number
+            line_context = f" at line {line_number}" if isinstance(line_number, int) else ""
+            raise _validation_failure(
+                tool_name=tool_name,
+                message=f"JavaScript syntax validation failed{line_context}: {parser_message}",
+                expected_args={"code": "valid JavaScript source"},
+                received_args=details,
+                suggested_fix=f"Fix JavaScript syntax errors{line_context} and retry.",
+                example_payload={
+                    "name": tool_name,
+                    "arguments": {"code": "function transform(row){ return row; }"},
+                },
+                reason_code="invalid_arguments",
+            ) from exc
 
     @server.tool(name="register_code_package")
     def register_code_package(
@@ -4224,12 +4208,9 @@ def create_server(
         code: str,
         code_type: str = "integrationTableTransform",
         *,
-        language: str = "javascript",
-        service_name: str = "v8TransformService",
-        code_format: str = "javascript",
+        code_status: str = "active",
         database_name: str = "faircom",
         owner_name: str = "admin",
-        created_by: str = "admin",
         comment: str = "",
         description: str = "",
         metadata: dict[str, object] | None = None,
@@ -4239,34 +4220,6 @@ def create_server(
         normalized_name = code_name.strip()
         normalized_code = code.strip()
         normalized_type = code_type.strip()
-
-        def _record_code_package_write_result(
-            outcome: str,
-            *,
-            extra_details: dict[str, object] | None = None,
-        ) -> None:
-            audit_details: dict[str, object] = {
-                "tool": "register_code_package",
-                "code_name": normalized_name,
-                "operation": "upsert",
-                "outcome": outcome,
-            }
-            if extra_details:
-                audit_details.update(extra_details)
-            audit_log.record(
-                event_type="code_package_write_result",
-                details=audit_details,
-            )
-
-        def _sql_quote_literal(value: str) -> str:
-            return "'" + value.replace("'", "''") + "'"
-
-        select_identity_sql = (
-            "SELECT TOP 1 id FROM codepackage_name "
-            f"WHERE codepackage_name = {_sql_quote_literal(normalized_name)} "
-            f"AND database_name = {_sql_quote_literal(database_name)} "
-            f"AND owner_name = {_sql_quote_literal(owner_name)}"
-        )
 
         audit_log.record(
             event_type="code_package_write_attempt",
@@ -4293,7 +4246,7 @@ def create_server(
                         "name": "register_code_package",
                         "arguments": {
                             "code_name": "decode_mixing_tank",
-                            "code": "function transform(row){ return row; }",
+                            "code": "record.value = record.source_payload.value;",
                             "confirm_write": True,
                         },
                     },
@@ -4309,76 +4262,44 @@ def create_server(
                         "name": "register_code_package",
                         "arguments": {
                             "code_name": "decode_mixing_tank",
-                            "code": "function transform(row){ return row; }",
+                            "code": "record.value = record.source_payload.value;",
                             "confirm_write": True,
                         },
                     },
                 )
-            if normalized_type not in _CODE_PACKAGE_TYPE_ENUM:
+            if normalized_type not in _CODE_PACKAGE_CREATE_TYPE_ENUM:
                 raise _validation_failure(
                     tool_name="register_code_package",
                     message="Unsupported code_type",
-                    expected_args={"code_type": f"one of {_CODE_PACKAGE_TYPE_ENUM}"},
+                    expected_args={"code_type": f"one of {_CODE_PACKAGE_CREATE_TYPE_ENUM}"},
                     received_args={"code_type": code_type},
-                    suggested_fix="Use one of the supported FairCom code package types.",
+                    suggested_fix=(
+                        "createCodePackage/alterCodePackage only accept "
+                        f"{_CODE_PACKAGE_CREATE_TYPE_ENUM}."
+                    ),
                     example_payload={
                         "name": "register_code_package",
                         "arguments": {
                             "code_name": "decode_mixing_tank",
-                            "code": "function transform(row){ return row; }",
+                            "code": "record.value = record.source_payload.value;",
                             "code_type": "integrationTableTransform",
                             "confirm_write": True,
                         },
                     },
                 )
 
-            # Parse JavaScript at registration time so syntax defects surface before
-            # transform creation and can be attributed to this write action.
-            if language.strip().lower() == "javascript":
-                try:
-                    import esprima  # type: ignore[import-not-found, import-untyped]
-
-                    esprima.parseScript(normalized_code)
-                except Exception as exc:
-                    parser_message = str(exc).strip() or "Unknown JavaScript syntax error"
-                    syntax_details: dict[str, object] = {
-                        "code_name": normalized_name,
-                        "language": language,
-                        "parser_message": parser_message,
-                    }
-                    line_number = getattr(exc, "lineNumber", None)
-                    column_number = getattr(exc, "column", None)
-                    if isinstance(line_number, int):
-                        syntax_details["line"] = line_number
-                    if isinstance(column_number, int):
-                        syntax_details["column"] = column_number
-                    line_context = f" at line {line_number}" if isinstance(line_number, int) else ""
-                    raise _validation_failure(
-                        tool_name="register_code_package",
-                        message=(
-                            f"JavaScript syntax validation failed{line_context}: {parser_message}"
-                        ),
-                        expected_args={"code": "valid JavaScript source"},
-                        received_args=syntax_details,
-                        suggested_fix=(
-                            "Fix JavaScript syntax errors"
-                            f"{line_context if line_context else ''} and retry registration."
-                        ),
-                        example_payload={
-                            "name": "register_code_package",
-                            "arguments": {
-                                "code_name": "decode_mixing_tank",
-                                "code": "function transform(row){ return row; }",
-                                "confirm_write": True,
-                            },
-                        },
-                        reason_code="invalid_arguments",
-                    ) from exc
+            _validate_javascript_code(
+                tool_name="register_code_package", code_name=normalized_name, code=normalized_code
+            )
 
             if dry_run:
-                _record_code_package_write_result(
-                    "previewed",
-                    extra_details={
+                audit_log.record(
+                    event_type="code_package_write_result",
+                    details={
+                        "tool": "register_code_package",
+                        "code_name": normalized_name,
+                        "operation": "upsert",
+                        "outcome": "previewed",
                         "dry_run": True,
                         "execution_status": "not_executed",
                     },
@@ -4392,18 +4313,7 @@ def create_server(
                     "database_name": database_name,
                     "owner_name": owner_name,
                     "execution_status": "not_executed",
-                    "preview": "Code package registration would execute",
-                    "preview_details": {
-                        "lookup_statement": select_identity_sql,
-                        "language": language,
-                        "service_name": service_name,
-                        "code_format": code_format,
-                        "writes": [
-                            "insert codepackage_name when missing",
-                            "insert or update codepackage",
-                            "upsert codepackage_history for current version",
-                        ],
-                    },
+                    "preview": "createCodePackage or alterCodePackage would execute",
                     "warnings": [
                         "Dry run is a local preview only and does not call FairCom backend APIs.",
                     ],
@@ -4429,178 +4339,50 @@ def create_server(
                     example_payload={
                         "name": "register_code_package",
                         "arguments": {
-                            "code_name": "decode_mixing_tank",
-                            "code": "function transform(row){ return row; }",
+                            "code_name": normalized_name,
+                            "code": normalized_code,
                             "confirm_write": True,
                         },
                     },
                     reason_code="missing_write_confirmation",
                 )
         except ValidationFailure as exc:
-            _record_code_package_write_result(
-                "rejected",
-                extra_details={
+            audit_log.record(
+                event_type="code_package_write_result",
+                details={
+                    "tool": "register_code_package",
+                    "code_name": normalized_name,
+                    "operation": "upsert",
+                    "outcome": "rejected",
                     "reason_code": exc.details.get("reason_code", "validation_error"),
                     "error_message": exc.message,
                 },
             )
             raise
 
-        def _extract_sql_rows(result: object) -> list[dict[str, object]]:
-            if not isinstance(result, dict):
-                return []
-            nested = result.get("result")
-            if not isinstance(nested, dict):
-                return []
-            data = nested.get("data")
-            if not isinstance(data, list):
-                return []
-            rows: list[dict[str, object]] = []
-            for entry in data:
-                if isinstance(entry, dict):
-                    rows.append(entry)
-            return rows
-
-        def _as_int(value: object) -> int | None:
-            if isinstance(value, int):
-                return value
-            if isinstance(value, float) and value.is_integer():
-                return int(value)
-            if isinstance(value, str):
-                try:
-                    return int(value)
-                except ValueError:
-                    return None
-            return None
-
-        metadata_payload: dict[str, object] = {
+        package_payload: dict[str, object] = {
+            "databaseName": database_name,
+            "ownerName": owner_name,
+            "codeName": normalized_name,
+            "codeLanguage": "javascript",
             "codeType": normalized_type,
-            "owner": owner_name,
-            "database": database_name,
+            "codeStatus": code_status,
+            "comment": comment,
+            "description": description,
+            "metadata": metadata or {},
+            "code": normalized_code,
+            "codeFormat": "utf8",
         }
-        if isinstance(metadata, dict):
-            metadata_payload.update(metadata)
-        metadata_json = json.dumps(metadata_payload, separators=(",", ":"))
 
-        def _run_registration() -> dict[str, object]:
-            existing_name_rows = _extract_sql_rows(sql_adapter.query(select_identity_sql))
-            codepackage_id = (
-                _as_int(existing_name_rows[0].get("id")) if existing_name_rows else None
+        def _run_registration() -> object:
+            exists = _code_package_exists(
+                code_name=normalized_name,
+                database_name=database_name,
+                owner_name=owner_name,
             )
-            name_inserted = False
-
-            if codepackage_id is None:
-                insert_name_sql = (
-                    "INSERT INTO codepackage_name (codepackage_name, database_name, owner_name) "
-                    f"VALUES ({_sql_quote_literal(normalized_name)}, "
-                    f"{_sql_quote_literal(database_name)}, {_sql_quote_literal(owner_name)})"
-                )
-                sql_adapter.execute(insert_name_sql)
-                name_inserted = True
-                refreshed_name_rows = _extract_sql_rows(sql_adapter.query(select_identity_sql))
-                codepackage_id = (
-                    _as_int(refreshed_name_rows[0].get("id")) if refreshed_name_rows else None
-                )
-
-            if codepackage_id is None:
-                raise ValidationFailure(
-                    "Failed to resolve codepackage_id after codepackage_name registration",
-                    details={"code_name": normalized_name},
-                )
-
-            existing_body_sql = (
-                "SELECT TOP 1 codepackage_id, version FROM codepackage "
-                f"WHERE codepackage_id = {codepackage_id}"
-            )
-            existing_body_rows = _extract_sql_rows(sql_adapter.query(existing_body_sql))
-            existing_version = (
-                _as_int(existing_body_rows[0].get("version")) if existing_body_rows else None
-            )
-            next_version = 1 if existing_version is None else existing_version + 1
-
-            if existing_body_rows:
-                update_sql = (
-                    "UPDATE codepackage "
-                    f"SET version = {next_version}, "
-                    "active = 1, "
-                    "status = 'active', "
-                    f"type = {_sql_quote_literal(normalized_type)}, "
-                    f"language = {_sql_quote_literal(language)}, "
-                    f"service_name = {_sql_quote_literal(service_name)}, "
-                    f"code_format = {_sql_quote_literal(code_format)}, "
-                    f"updated_by = {_sql_quote_literal(created_by)}, "
-                    f"code = {_sql_quote_literal(normalized_code)}, "
-                    f"comment = {_sql_quote_literal(comment)}, "
-                    f"description = {_sql_quote_literal(description)}, "
-                    f"metadata = {_sql_quote_literal(metadata_json)} "
-                    f"WHERE codepackage_id = {codepackage_id}"
-                )
-                sql_adapter.execute(update_sql)
-                body_operation = "updated"
-            else:
-                insert_body_sql = (
-                    "INSERT INTO codepackage ("
-                    "codepackage_id, version, active, status, cloned_codepackage_id, "
-                    "type, language, service_name, code_format, created_by, updated_by, "
-                    "code, comment, description, metadata"
-                    ") VALUES ("
-                    f"{codepackage_id}, {next_version}, 1, 'active', NULL, "
-                    f"{_sql_quote_literal(normalized_type)}, "
-                    f"{_sql_quote_literal(language)}, "
-                    f"{_sql_quote_literal(service_name)}, "
-                    f"{_sql_quote_literal(code_format)}, "
-                    f"{_sql_quote_literal(created_by)}, "
-                    f"{_sql_quote_literal(created_by)}, "
-                    f"{_sql_quote_literal(normalized_code)}, "
-                    f"{_sql_quote_literal(comment)}, "
-                    f"{_sql_quote_literal(description)}, "
-                    f"{_sql_quote_literal(metadata_json)}"
-                    ")"
-                )
-                sql_adapter.execute(insert_body_sql)
-                body_operation = "inserted"
-
-            delete_history_sql = (
-                "DELETE FROM codepackage_history "
-                f"WHERE codepackage_id = {codepackage_id} AND version = {next_version}"
-            )
-            sql_adapter.execute(delete_history_sql)
-            deactivate_history_sql = (
-                "UPDATE codepackage_history "
-                "SET active = 0, status = 'inactive' "
-                f"WHERE codepackage_id = {codepackage_id}"
-            )
-            sql_adapter.execute(deactivate_history_sql)
-            insert_history_sql = (
-                "INSERT INTO codepackage_history ("
-                "codepackage_id, version, active, status, cloned_codepackage_id, "
-                "created_on, updated_on, type, language, service_name, code_format, "
-                "created_by, updated_by, code, comment, description, metadata"
-                ") "
-                "SELECT TOP 1 "
-                "codepackage_id, version, active, status, cloned_codepackage_id, "
-                "created_on, updated_on, type, language, service_name, code_format, "
-                "created_by, updated_by, code, comment, description, metadata "
-                "FROM codepackage "
-                f"WHERE codepackage_id = {codepackage_id}"
-            )
-            sql_adapter.execute(insert_history_sql)
-
-            return {
-                "result": {
-                    "code_name": normalized_name,
-                    "database_name": database_name,
-                    "owner_name": owner_name,
-                    "codepackage_id": codepackage_id,
-                    "version": next_version,
-                    "code_type": normalized_type,
-                    "name_row_inserted": name_inserted,
-                    "codepackage_operation": body_operation,
-                    "history_row_written": True,
-                },
-                "errorCode": 0,
-                "errorMessage": "",
-            }
+            if exists:
+                return connector_adapter.alter_code_package(package_payload)
+            return connector_adapter.create_code_package(package_payload)
 
         result = _execute_code_package_write(
             tool_name="register_code_package",
@@ -4616,6 +4398,190 @@ def create_server(
                     "confirm_write_required": True,
                     "mutation_applied": True,
                 }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="clone_code_package")
+    def clone_code_package(
+        code_name: str,
+        new_code_name: str,
+        database_name: str = "faircom",
+        owner_name: str = "admin",
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        normalized_name = code_name.strip()
+        normalized_new_name = new_code_name.strip()
+        payload = {
+            "databaseName": database_name,
+            "ownerName": owner_name,
+            "codeName": normalized_name,
+            "newCodeName": normalized_new_name,
+        }
+        audit_log.record(
+            event_type="code_package_write_attempt",
+            details={
+                "tool": "clone_code_package",
+                "operation": "clone",
+                "code_name": normalized_name,
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
+        )
+        if dry_run:
+            return {
+                "mode": "dry_run",
+                "status": "success",
+                "tool_name": "clone_code_package",
+                "execution_status": "not_executed",
+                "preview": "cloneCodePackage would execute",
+                "payload": payload,
+                "warnings": [
+                    "Dry run is a local preview only and does not call FairCom backend APIs.",
+                ],
+                "hint": "Set confirm_write=True to apply.",
+            }
+        if not normalized_name or not normalized_new_name:
+            raise _validation_failure(
+                tool_name="clone_code_package",
+                message="code_name and new_code_name are required",
+                expected_args={
+                    "code_name": "string (required)",
+                    "new_code_name": "string (required)",
+                },
+                received_args={"code_name": code_name, "new_code_name": new_code_name},
+                suggested_fix="Provide non-empty code_name and new_code_name.",
+                example_payload={
+                    "name": "clone_code_package",
+                    "arguments": {
+                        "code_name": "decode_mixing_tank",
+                        "new_code_name": "decode_mixing_tank_v2",
+                        "confirm_write": True,
+                    },
+                },
+            )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="clone_code_package",
+                message="clone_code_package requires confirm_write=True",
+                expected_args={"confirm_write": "true for non-dry-run changes"},
+                received_args={"confirm_write": confirm_write, "dry_run": dry_run},
+                suggested_fix="Set confirm_write=true to apply the change.",
+                example_payload={
+                    "name": "clone_code_package",
+                    "arguments": {
+                        "code_name": normalized_name,
+                        "new_code_name": normalized_new_name,
+                        "confirm_write": True,
+                    },
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _execute_code_package_write(
+            tool_name="clone_code_package",
+            code_name=normalized_name,
+            operation="clone",
+            writer=lambda: _run_tool(
+                "clone_code_package",
+                "write",
+                lambda: connector_adapter.clone_code_package(payload),
+            ),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {"dry_run_applied": False, "confirm_write_required": True, "mutation_applied": True}
+            )
+            return enriched
+        return result
+
+    @server.tool(name="revert_code_package")
+    def revert_code_package(
+        code_name: str,
+        version: int,
+        database_name: str = "faircom",
+        owner_name: str = "admin",
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        normalized_name = code_name.strip()
+        payload = {
+            "databaseName": database_name,
+            "ownerName": owner_name,
+            "codeName": normalized_name,
+            "version": version,
+        }
+        audit_log.record(
+            event_type="code_package_write_attempt",
+            details={
+                "tool": "revert_code_package",
+                "operation": "revert",
+                "code_name": normalized_name,
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
+        )
+        if dry_run:
+            return {
+                "mode": "dry_run",
+                "status": "success",
+                "tool_name": "revert_code_package",
+                "execution_status": "not_executed",
+                "preview": "revertCodePackage would execute",
+                "payload": payload,
+                "warnings": [
+                    "Dry run is a local preview only and does not call FairCom backend APIs.",
+                ],
+                "hint": "Set confirm_write=True to apply.",
+            }
+        if not normalized_name:
+            raise _validation_failure(
+                tool_name="revert_code_package",
+                message="code_name is required",
+                expected_args={"code_name": "string (required)"},
+                received_args={"code_name": code_name},
+                suggested_fix="Provide a non-empty code_name.",
+                example_payload={
+                    "name": "revert_code_package",
+                    "arguments": {
+                        "code_name": "decode_mixing_tank",
+                        "version": 1,
+                        "confirm_write": True,
+                    },
+                },
+            )
+        if not confirm_write:
+            raise _validation_failure(
+                tool_name="revert_code_package",
+                message="revert_code_package requires confirm_write=True",
+                expected_args={"confirm_write": "true for non-dry-run changes"},
+                received_args={"confirm_write": confirm_write, "dry_run": dry_run},
+                suggested_fix="Set confirm_write=true to apply the change.",
+                example_payload={
+                    "name": "revert_code_package",
+                    "arguments": {
+                        "code_name": normalized_name,
+                        "version": version,
+                        "confirm_write": True,
+                    },
+                },
+                reason_code="missing_write_confirmation",
+            )
+        result = _execute_code_package_write(
+            tool_name="revert_code_package",
+            code_name=normalized_name,
+            operation="revert",
+            writer=lambda: _run_tool(
+                "revert_code_package",
+                "write",
+                lambda: connector_adapter.revert_code_package(payload),
+            ),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {"dry_run_applied": False, "confirm_write_required": True, "mutation_applied": True}
             )
             return enriched
         return result
@@ -4905,36 +4871,38 @@ def create_server(
                             ),
                         },
                         {
-                            "name": "list_transforms",
-                            "aliases": ["listTransforms"],
+                            "name": "list_integration_tables",
+                            "aliases": ["listIntegrationTables"],
                             "group": "metadata",
                             "risk_level": "low",
                             "idempotent": True,
                             "stability": "stable",
                             "description": (
-                                "List transform connectors visible to the configured "
-                                "access context."
+                                "List FairCom Edge integration tables visible to the "
+                                "configured access context."
                             ),
                         },
                         {
-                            "name": "describe_transforms",
-                            "aliases": ["describeTransforms"],
+                            "name": "describe_integration_tables",
+                            "aliases": ["describeIntegrationTables"],
                             "group": "metadata",
                             "risk_level": "low",
                             "idempotent": True,
                             "stability": "stable",
-                            "description": "Describe configured transform connectors.",
+                            "description": (
+                                "Describe integration tables, including their transformSteps."
+                            ),
                         },
                         {
-                            "name": "create_transform",
-                            "aliases": ["createTransform"],
+                            "name": "create_integration_table",
+                            "aliases": ["createIntegrationTable"],
                             "group": "connector",
                             "risk_level": "critical",
                             "idempotent": False,
                             "stability": "stable",
                             "description": (
-                                "Create a transform connector with confirmation "
-                                "guardrails and dry-run preview."
+                                "Create an integration table (optionally with transformSteps) "
+                                "with confirmation guardrails and dry-run preview."
                             ),
                         },
                         {
@@ -4949,14 +4917,14 @@ def create_server(
                             ),
                         },
                         {
-                            "name": "describe_code_package",
-                            "aliases": ["describeCodePackage"],
+                            "name": "describe_code_packages",
+                            "aliases": ["describeCodePackages"],
                             "group": "metadata",
                             "risk_level": "low",
                             "idempotent": True,
                             "stability": "stable",
                             "description": (
-                                "Describe a registered code package and active revision metadata."
+                                "Describe registered code packages, including source code."
                             ),
                         },
                         {
@@ -4967,31 +4935,62 @@ def create_server(
                             "idempotent": False,
                             "stability": "stable",
                             "description": (
-                                "Create or update a code package and maintain codepackage history."
+                                "Create or update a code package via the FairCom admin API "
+                                "(createCodePackage/alterCodePackage)."
                             ),
                         },
                         {
-                            "name": "alter_transform",
-                            "aliases": ["alterTransform"],
+                            "name": "clone_code_package",
+                            "aliases": ["cloneCodePackage"],
+                            "group": "write",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": "Clone an existing code package under a new name.",
+                        },
+                        {
+                            "name": "revert_code_package",
+                            "aliases": ["revertCodePackage"],
+                            "group": "write",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": "Revert a code package to a prior version.",
+                        },
+                        {
+                            "name": "alter_integration_table",
+                            "aliases": ["alterIntegrationTable"],
                             "group": "connector",
                             "risk_level": "critical",
                             "idempotent": False,
                             "stability": "stable",
                             "description": (
-                                "Alter a transform connector with confirmation "
-                                "guardrails and dry-run preview."
+                                "Alter an integration table (fields, transformSteps, retention) "
+                                "with confirmation guardrails and dry-run preview."
                             ),
                         },
                         {
-                            "name": "delete_transform",
-                            "aliases": ["deleteTransform"],
+                            "name": "delete_integration_tables",
+                            "aliases": ["deleteIntegrationTables"],
                             "group": "connector",
                             "risk_level": "critical",
                             "idempotent": False,
                             "stability": "stable",
                             "description": (
-                                "Delete a transform connector with confirmation "
-                                "guardrails and dry-run preview."
+                                "Delete integration tables with confirmation guardrails "
+                                "and dry-run preview."
+                            ),
+                        },
+                        {
+                            "name": "test_integration_table_transform_steps",
+                            "aliases": ["testIntegrationTableTransformSteps"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Test new transform steps against an integration table before "
+                                "running them for real."
                             ),
                         },
                         {

@@ -418,6 +418,17 @@ Example apply:
 ```
 
 The server does not auto-discover device register maps or connector-specific address models. Supply the connector payload details required by the FairCom Edge configuration API for the connector family you are managing.
+
+## FairCom JSON API Surface
+
+FairCom's JSON API is split into three separate namespaces, selected by the `api` field on every request:
+
+- `db` — SQL query/execute and table metadata (`sql_query`, `sql_query_page`, `sql_execute`, table tools).
+- `hub` — Edge connector lifecycle (`createInput`/`createOutput` and friends), plus integration tables and their `transformSteps`.
+- `admin` — code packages, accounts, and other server administration actions.
+
+There is no single unified endpoint that covers all three — for example, a JavaScript transform is not one object. It is a code package registered through `admin` and then attached to an integration table's `transformSteps` through `hub`. FairCom MCP routes each tool call to the correct namespace and payload shape automatically so you don't need to track this split yourself, but if you see an upstream error referencing an `api` value, this is why.
+
 FAIRCOM_TLS_VERIFY=true              # Set to false for self-signed certs
 
 # Optional: Safety controls

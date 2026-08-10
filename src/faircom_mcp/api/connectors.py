@@ -81,6 +81,11 @@ def transform_connector_request(
                 settings[key] = transformed[key]
                 if key not in _MODBUS_SETTINGS_MIRROR_ONLY_KEYS:
                     transformed.pop(key, None)
+        # The Edge admin UI treats this as a required dropdown even though the
+        # JSON API docs list a "zeroBased" default; set it explicitly on create
+        # so connectors don't show up as invalid/unset in the UI.
+        if action == "createInput" and "modbusDataAddressType" not in settings:
+            settings["modbusDataAddressType"] = "zeroBased"
         transformed["settings"] = settings
 
     return transformed
@@ -134,17 +139,55 @@ class ConnectorAdapter:
     def delete_output(self, payload: Mapping[str, Any]) -> Any:
         return self._client.hub_action("deleteOutput", payload)
 
-    def list_transforms(self, payload: Mapping[str, Any] | None = None) -> Any:
-        return self._client.hub_action("listTransforms", payload)
+    # Per https://documentation.faircom.com/en_US/integration-tables-api-actions,
+    # transforms are configured as "transformSteps" on an integration table —
+    # there is no standalone "transform" hub action.
+    def list_integration_tables(self, payload: Mapping[str, Any] | None = None) -> Any:
+        return self._client.hub_action("listIntegrationTables", payload)
 
-    def describe_transforms(self, payload: Mapping[str, Any] | None = None) -> Any:
-        return self._client.hub_action("describeTransforms", payload)
+    def describe_integration_tables(self, payload: Mapping[str, Any] | None = None) -> Any:
+        return self._client.hub_action("describeIntegrationTables", payload)
 
-    def create_transform(self, payload: Mapping[str, Any]) -> Any:
-        return self._client.hub_action("createTransform", payload)
+    def create_integration_table(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.hub_action("createIntegrationTable", payload)
 
-    def alter_transform(self, payload: Mapping[str, Any]) -> Any:
-        return self._client.hub_action("alterTransform", payload)
+    def alter_integration_table(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.hub_action("alterIntegrationTable", payload)
 
-    def delete_transform(self, payload: Mapping[str, Any]) -> Any:
-        return self._client.hub_action("deleteTransform", payload)
+    def delete_integration_tables(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.hub_action("deleteIntegrationTables", payload)
+
+    def test_integration_table_transform_steps(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.hub_action("testIntegrationTableTransformSteps", payload)
+
+    def copy_integration_table_transform_steps(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.hub_action("copyIntegrationTableTransformSteps", payload)
+
+    def rerun_integration_table_transform_steps(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.hub_action("rerunIntegrationTableTransformSteps", payload)
+
+    # Per https://documentation.faircom.com/en_US/code-packages-api-actions, code
+    # packages are managed through the "admin" API, not raw SQL against system tables.
+    def create_code_package(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.admin_action("createCodePackage", payload)
+
+    def alter_code_package(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.admin_action("alterCodePackage", payload)
+
+    def clone_code_package(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.admin_action("cloneCodePackage", payload)
+
+    def revert_code_package(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.admin_action("revertCodePackage", payload)
+
+    def list_code_packages(self, payload: Mapping[str, Any] | None = None) -> Any:
+        return self._client.admin_action("listCodePackages", payload)
+
+    def describe_code_packages(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.admin_action("describeCodePackages", payload)
+
+    def list_code_package_history(self, payload: Mapping[str, Any] | None = None) -> Any:
+        return self._client.admin_action("listCodePackageHistory", payload)
+
+    def describe_code_package_history(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.admin_action("describeCodePackageHistory", payload)
