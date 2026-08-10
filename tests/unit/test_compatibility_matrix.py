@@ -598,13 +598,35 @@ def test_compatibility_matrix_describe_inputs_includes_runtime_service_state(
             client_factory=lambda _config: _ClientWithServiceState(),
         )
 
-    result = server.tools["describe_inputs"]()
+    result = server.tools["describe_inputs"](payload={"inputNames": ["modbus_energy_input"]})
 
     assert result["inputs"][0]["serviceName"] == "modbus"
     assert result["inputs"][0]["enabled"] is False
     assert result["inputs"][0]["description"] == "Boiler room telemetry"
     assert result["inputs"][0]["runtime_service_state"]["active"] is False
     assert result["inputs"][0]["runtime_service_state"]["service_name"] == "modbus"
+
+
+def test_compatibility_matrix_describe_inputs_requires_input_names(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    bare_call_error = None
+    try:
+        server.tools["describe_inputs"]()
+    except ValidationFailure as exc:
+        bare_call_error = exc
+    assert bare_call_error is not None
+    assert "inputNames" in bare_call_error.message
+
+    service_name_only_error = None
+    try:
+        server.tools["describe_inputs"](payload={"serviceName": "modbus"})
+    except ValidationFailure as exc:
+        service_name_only_error = exc
+    assert service_name_only_error is not None
+    assert "inputNames" in service_name_only_error.message
 
 
 def test_compatibility_matrix_alter_input_adds_recovery_for_inactive_service(
@@ -1177,7 +1199,7 @@ def test_compatibility_matrix_describe_inputs_lifts_enabled_and_description(
     ):
         server = server_module.create_server(_config(), client_factory=lambda _config: object())
 
-    result = server.tools["describe_inputs"](payload={"connectorNames": ["modbus_energy_input"]})
+    result = server.tools["describe_inputs"](payload={"inputNames": ["modbus_energy_input"]})
     first_input = result["inputs"][0]
     assert first_input["enabled"] is False
     assert first_input["description"] == "Boiler room telemetry"
@@ -1560,7 +1582,8 @@ def test_compatibility_matrix_register_code_package_sets_wizard_metadata(
         confirm_write=True,
     )
 
-    assert result["warnings"] == []
+    assert len(result["warnings"]) == 1
+    assert "UNVERIFIED" in result["warnings"][0]
     _action, payload = connector_adapter.calls[-1]
     assert payload["metadata"]["inputFields"] == ["source_payload.value"]
     assert payload["metadata"]["outputFieldDefinitions"] == [

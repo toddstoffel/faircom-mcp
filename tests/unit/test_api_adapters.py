@@ -5,7 +5,7 @@ from typing import Any, cast
 from faircom_mcp.api.connectors import ConnectorAdapter
 from faircom_mcp.api.sql import SQLAdapter
 from faircom_mcp.api.tables import TableAdapter
-from faircom_mcp.errors import ValidationFailure
+from faircom_mcp.errors import UpstreamAPIError, ValidationFailure
 from faircom_mcp.security import SqlStatementPolicy
 
 
@@ -49,6 +49,14 @@ class StubClient:
 def test_table_adapter_calls_expected_actions() -> None:
     client = StubClient()
     adapter = TableAdapter(cast(Any, client))
+
+    def _post_action(action: str, payload: dict[str, object] | None = None) -> dict[str, object]:
+        client.calls.append((action, payload))
+        if action == "describeTables":
+            return {"result": {"data": [{"action": action, "payload": payload}]}}
+        return {"action": action, "payload": payload}
+
+    client.post_action = _post_action
 
     tables_result = adapter.list_tables("cust%")
     describe_result = adapter.describe_table("customers")
@@ -342,10 +350,14 @@ def test_table_adapter_extracts_columns_and_indexes() -> None:
     adapter = TableAdapter(cast(Any, client))
 
     client.post_action = lambda action, payload=None: {
-        "action": action,
-        "payload": payload,
-        "columns": [{"name": "id"}, {"name": "name"}],
-        "indexes": [{"name": "pk_customers"}],
+        "result": {
+            "data": [
+                {
+                    "columns": [{"name": "id"}, {"name": "name"}],
+                    "indexes": [{"name": "pk_customers"}],
+                }
+            ]
+        }
     }
 
     columns = adapter.list_table_columns("customers")
@@ -361,6 +373,43 @@ def test_table_adapter_extracts_columns_and_indexes() -> None:
         "indexes": [{"name": "pk_customers"}],
         "index_count": 1,
     }
+
+
+def test_table_adapter_falls_back_to_integration_table_for_columns() -> None:
+    client = StubClient()
+    adapter = TableAdapter(cast(Any, client))
+
+    def _post_action(action: str, payload: dict[str, object] | None = None) -> dict[str, object]:
+        _ = (action, payload)
+        raise UpstreamAPIError(
+            "table not found",
+            details={"errorCode": 14201, "errorMessage": "Table not found"},
+        )
+
+    def _hub_action(action: str, payload: dict[str, object] | None = None) -> dict[str, object]:
+        client.calls.append((f"hub:{action}", payload))
+        return {
+            "tables": [
+                {
+                    "tableName": "modbus_energy_raw",
+                    "fields": [{"name": "id", "type": "int"}, {"name": "value", "type": "double"}],
+                }
+            ]
+        }
+
+    client.post_action = _post_action
+    client.hub_action = _hub_action
+
+    columns = adapter.list_table_columns("modbus_energy_raw")
+
+    assert columns == {
+        "table_name": "modbus_energy_raw",
+        "columns": [{"name": "id", "type": "int"}, {"name": "value", "type": "double"}],
+        "column_count": 2,
+    }
+    assert ("hub:describeIntegrationTables", {"tables": [{"tableName": "modbus_energy_raw"}]}) in (
+        client.calls
+    )
 
 
 def test_sql_adapter_calls_expected_actions() -> None:

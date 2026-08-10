@@ -1783,6 +1783,35 @@ def create_server(
 
         return normalized_payload
 
+    def _validate_describe_inputs_payload(
+        *,
+        tool_name: str,
+        payload: dict[str, object] | None,
+    ) -> dict[str, object]:
+        input_names = payload.get("inputNames") if isinstance(payload, dict) else None
+        valid_input_names = (
+            isinstance(input_names, list)
+            and bool(input_names)
+            and all(isinstance(name, str) and name.strip() for name in input_names)
+        )
+        if not valid_input_names:
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="payload.inputNames is required and must be a non-empty list of strings",
+                expected_args={"payload.inputNames": "list[string] (required, non-empty)"},
+                received_args={"payload": payload},
+                suggested_fix=(
+                    "Call list_inputs first to discover input names, then pass them as "
+                    "payload.inputNames."
+                ),
+                example_payload={
+                    "name": "describe_inputs",
+                    "arguments": {"payload": {"inputNames": ["modbus_1"]}},
+                },
+                reason_code="invalid_arguments",
+            )
+        return dict(payload) if isinstance(payload, dict) else {}
+
     def _validate_sql_shape(tool_name: str, statement: str) -> None:
         unsupported = detect_unsupported_features(statement)
         if not unsupported:
@@ -2000,7 +2029,10 @@ def create_server(
 """
             )
 
-    @server.tool(name="list_tables")
+    @server.tool(
+        name="list_tables",
+        description="List database tables, optionally filtered by a name pattern.",
+    )
     def list_tables(
         name_like: str | None = None,
         table_like: str | None = None,
@@ -2055,7 +2087,10 @@ def create_server(
             metadata=metadata,
         )
 
-    @server.tool(name="describe_table")
+    @server.tool(
+        name="describe_table",
+        description="Describe a table's columns and metadata by name.",
+    )
     def describe_table(table_name: str | None = None, table: str | None = None) -> object:
         resolved_table_name, normalized_args = _resolve_single_string_arg(
             tool_name="describe_table",
@@ -2078,7 +2113,10 @@ def create_server(
             ),
         )
 
-    @server.tool(name="list_table_columns")
+    @server.tool(
+        name="list_table_columns",
+        description="List the columns defined on a table, including integration tables.",
+    )
     def list_table_columns(table_name: str | None = None, table: str | None = None) -> object:
         resolved_table_name, normalized_args = _resolve_single_string_arg(
             tool_name="list_table_columns",
@@ -2101,7 +2139,10 @@ def create_server(
             ),
         )
 
-    @server.tool(name="list_table_indexes")
+    @server.tool(
+        name="list_table_indexes",
+        description="List the indexes defined on a table.",
+    )
     def list_table_indexes(table_name: str | None = None, table: str | None = None) -> object:
         resolved_table_name, normalized_args = _resolve_single_string_arg(
             tool_name="list_table_indexes",
@@ -2124,11 +2165,20 @@ def create_server(
             ),
         )
 
-    @server.tool(name="list_inputs")
+    @server.tool(
+        name="list_inputs",
+        description="List the names of previously created input connectors.",
+    )
     def list_inputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool("list_inputs", "metadata", lambda: connector_adapter.list_inputs(payload))
 
-    @server.tool(name="describe_inputs")
+    @server.tool(
+        name="describe_inputs",
+        description=(
+            "Describe one or more input connectors by name (payload.inputNames is required; "
+            "call list_inputs first to discover names)."
+        ),
+    )
     def describe_inputs(payload: dict[str, object] | None = None) -> object:
         def _normalize_input_descriptions(
             value: object,
@@ -2183,7 +2233,11 @@ def create_server(
                     _collect_service_names(nested, names)
 
         def _describe_with_runtime() -> object:
-            described = connector_adapter.describe_inputs(payload)
+            validated_payload = _validate_describe_inputs_payload(
+                tool_name="describe_inputs",
+                payload=payload,
+            )
+            described = connector_adapter.describe_inputs(validated_payload)
             service_names: set[str] = set()
             _collect_service_names(described, service_names)
             runtime_map = _list_service_runtime_state(service_names)
@@ -2195,7 +2249,10 @@ def create_server(
             _describe_with_runtime,
         )
 
-    @server.tool(name="list_services")
+    @server.tool(
+        name="list_services",
+        description="List FairCom services and their runtime state (enabled/running/disabled).",
+    )
     def list_services(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
             "list_services",
@@ -2203,7 +2260,10 @@ def create_server(
             lambda: client.admin_action("listServices", payload),
         )
 
-    @server.tool(name="manage_service")
+    @server.tool(
+        name="manage_service",
+        description="Pause, resume, restart, shut down, or start up a FairCom service.",
+    )
     def manage_service(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -2272,7 +2332,12 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="create_input")
+    @server.tool(
+        name="create_input",
+        description=(
+            "Create a new input connector that collects data from a device or software system."
+        ),
+    )
     def create_input(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -2358,7 +2423,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="alter_input")
+    @server.tool(
+        name="alter_input",
+        description="Modify settings on an existing input connector.",
+    )
     def alter_input(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -2666,7 +2734,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="delete_input")
+    @server.tool(
+        name="delete_input",
+        description="Delete an input connector definition.",
+    )
     def delete_input(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -2743,7 +2814,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="list_outputs")
+    @server.tool(
+        name="list_outputs",
+        description="List the names of previously created output connectors.",
+    )
     def list_outputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
             "list_outputs",
@@ -2751,7 +2825,10 @@ def create_server(
             lambda: connector_adapter.list_outputs(payload),
         )
 
-    @server.tool(name="describe_outputs")
+    @server.tool(
+        name="describe_outputs",
+        description="Describe one or more output connectors by name.",
+    )
     def describe_outputs(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
             "describe_outputs",
@@ -2759,7 +2836,12 @@ def create_server(
             lambda: connector_adapter.describe_outputs(payload),
         )
 
-    @server.tool(name="create_output")
+    @server.tool(
+        name="create_output",
+        description=(
+            "Create a new output connector that delivers collected data to an external service."
+        ),
+    )
     def create_output(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -2836,7 +2918,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="alter_output")
+    @server.tool(
+        name="alter_output",
+        description="Modify settings on an existing output connector.",
+    )
     def alter_output(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -2913,7 +2998,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="delete_output")
+    @server.tool(
+        name="delete_output",
+        description="Delete an output connector definition.",
+    )
     def delete_output(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -3093,7 +3181,10 @@ def create_server(
             "hint": "Set confirm_write=true to apply this change.",
         }
 
-    @server.tool(name="list_integration_tables")
+    @server.tool(
+        name="list_integration_tables",
+        description="List integration tables in a database.",
+    )
     def list_integration_tables(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
             "list_integration_tables",
@@ -3101,7 +3192,12 @@ def create_server(
             lambda: connector_adapter.list_integration_tables(payload),
         )
 
-    @server.tool(name="describe_integration_tables")
+    @server.tool(
+        name="describe_integration_tables",
+        description=(
+            "Describe one or more integration tables, including fields and transform steps."
+        ),
+    )
     def describe_integration_tables(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
             "describe_integration_tables",
@@ -3109,7 +3205,10 @@ def create_server(
             lambda: connector_adapter.describe_integration_tables(payload),
         )
 
-    @server.tool(name="create_integration_table")
+    @server.tool(
+        name="create_integration_table",
+        description=("Create an integration table, optionally with fields and transform steps."),
+    )
     def create_integration_table(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -3193,7 +3292,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="alter_integration_table")
+    @server.tool(
+        name="alter_integration_table",
+        description=("Alter an integration table's fields, transform steps, or retention policy."),
+    )
     def alter_integration_table(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -3549,7 +3651,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="delete_integration_tables")
+    @server.tool(
+        name="delete_integration_tables",
+        description="Delete one or more integration tables.",
+    )
     def delete_integration_tables(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -3635,7 +3740,13 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="test_integration_table_transform_steps")
+    @server.tool(
+        name="test_integration_table_transform_steps",
+        description=(
+            "Test an integration table's transform steps against records before applying "
+            "them for real."
+        ),
+    )
     def test_integration_table_transform_steps(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -3751,7 +3862,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="list_topics")
+    @server.tool(
+        name="list_topics",
+        description="List the names of MQTT topics the server is tracking.",
+    )
     def list_topics(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
             "list_topics",
@@ -3759,7 +3873,10 @@ def create_server(
             lambda: connector_adapter.list_topics(payload),
         )
 
-    @server.tool(name="describe_topics")
+    @server.tool(
+        name="describe_topics",
+        description="Describe one or more MQTT topics by name.",
+    )
     def describe_topics(payload: dict[str, object] | None = None) -> object:
         return _run_tool(
             "describe_topics",
@@ -3842,7 +3959,10 @@ def create_server(
 
         return dict(payload)
 
-    @server.tool(name="configure_topic")
+    @server.tool(
+        name="configure_topic",
+        description="Create or update an MQTT topic and bind it to an integration table.",
+    )
     def configure_topic(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -4091,7 +4211,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="delete_topic")
+    @server.tool(
+        name="delete_topic",
+        description="Delete an MQTT topic.",
+    )
     def delete_topic(
         payload: dict[str, object] | None = None,
         confirm_write: bool = False,
@@ -4186,7 +4309,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="sql_query")
+    @server.tool(
+        name="sql_query",
+        description="Run a read-only SQL query against a FairCom database.",
+    )
     def sql_query(
         statement: str | None = None,
         params: list[object] | None = None,
@@ -4223,7 +4349,10 @@ def create_server(
             ),
         )
 
-    @server.tool(name="sql_query_page")
+    @server.tool(
+        name="sql_query_page",
+        description="Run a read-only SQL query and return one page of results at a time.",
+    )
     def sql_query_page(
         statement: str | None = None,
         params: list[object] | None = None,
@@ -4279,7 +4408,13 @@ def create_server(
             ),
         )
 
-    @server.tool(name="get_usage_contract")
+    @server.tool(
+        name="get_usage_contract",
+        description=(
+            "Return this server's tool usage contract: argument aliases, canonical arg "
+            "names, and payload examples."
+        ),
+    )
     def get_usage_contract() -> object:
         def _extract_enums_from_schema(
             schema_node: dict[str, object],
@@ -4612,7 +4747,10 @@ def create_server(
             },
         )
 
-    @server.tool(name="describe_connector_schema")
+    @server.tool(
+        name="describe_connector_schema",
+        description="Describe the expected input or output connector payload schema for a service.",
+    )
     def describe_connector_schema(service_name: str, direction: str = "input") -> object:
         normalized = service_name.strip().lower()
         normalized_direction = direction.strip().lower() if direction else "input"
@@ -4651,7 +4789,10 @@ def create_server(
             },
         )
 
-    @server.tool(name="validate_connector_payloads")
+    @server.tool(
+        name="validate_connector_payloads",
+        description="Validate one or more connector payloads locally without writing to FairCom.",
+    )
     def validate_connector_payloads(
         action: str = "createInput",
         payload: dict[str, object] | None = None,
@@ -4992,7 +5133,10 @@ def create_server(
 
         return _run_tool("validate_connector_payloads", "admin", _run_preflight)
 
-    @server.tool(name="list_code_packages")
+    @server.tool(
+        name="list_code_packages",
+        description="List registered code packages.",
+    )
     def list_code_packages(
         name_like: str | None = None,
         database_name: str = "faircom",
@@ -5031,7 +5175,10 @@ def create_server(
             lambda: connector_adapter.list_code_packages(payload),
         )
 
-    @server.tool(name="describe_code_packages")
+    @server.tool(
+        name="describe_code_packages",
+        description="Describe one or more code packages by name.",
+    )
     def describe_code_packages(
         code_names: list[str],
         database_name: str = "faircom",
@@ -5114,7 +5261,12 @@ def create_server(
                 reason_code="invalid_arguments",
             ) from exc
 
-    @server.tool(name="register_code_package")
+    @server.tool(
+        name="register_code_package",
+        description=(
+            "Create or update a JavaScript code package, such as an integration table transform."
+        ),
+    )
     def register_code_package(
         code_name: str,
         code: str,
@@ -5155,6 +5307,17 @@ def create_server(
                     "wizard cannot find this code package as a usable Integration Table "
                     "Transform without it. Pass output_field_definitions (list of "
                     "{name, type} objects the transform writes)."
+                )
+            if resolved_metadata.get("inputFields") or resolved_metadata.get(
+                "outputFieldDefinitions"
+            ):
+                metadata_warnings.append(
+                    "UNVERIFIED: input_fields/output_field_definitions are written to "
+                    "metadata.inputFields/metadata.outputFieldDefinitions, but this exact shape "
+                    "has not been confirmed to make the package visible in the FairCom Edge "
+                    "Explorer wizard. If the wizard still reports no suitable code packages "
+                    "after this call, inspect the metadata FairCom's Code Editor GUI writes for "
+                    "a working package and compare it against what was sent here."
                 )
 
         audit_log.record(
@@ -5340,7 +5503,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="clone_code_package")
+    @server.tool(
+        name="clone_code_package",
+        description="Clone an existing code package under a new name.",
+    )
     def clone_code_package(
         code_name: str,
         new_code_name: str,
@@ -5434,7 +5600,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="revert_code_package")
+    @server.tool(
+        name="revert_code_package",
+        description="Revert a code package to a prior version.",
+    )
     def revert_code_package(
         code_name: str,
         version: int,
@@ -5524,7 +5693,10 @@ def create_server(
             return enriched
         return result
 
-    @server.tool(name="runtime_status")
+    @server.tool(
+        name="runtime_status",
+        description="Report this MCP server's own runtime and configuration status.",
+    )
     def runtime_status() -> object:
         return _run_tool(
             "runtime_status",
@@ -5537,7 +5709,10 @@ def create_server(
             },
         )
 
-    @server.tool(name="capabilities_summary")
+    @server.tool(
+        name="capabilities_summary",
+        description="Summarize the tools this MCP server exposes and their write-safety model.",
+    )
     def capabilities_summary() -> object:
         def _strip_tool_aliases(payload: dict[str, object]) -> dict[str, object]:
             tools = payload.get("tools")
@@ -5999,7 +6174,10 @@ def create_server(
             ),
         )
 
-    @server.tool(name="observability_metrics")
+    @server.tool(
+        name="observability_metrics",
+        description="Return this MCP server's own operational metrics.",
+    )
     def observability_metrics() -> object:
         return _run_tool(
             "observability_metrics",
@@ -6010,7 +6188,12 @@ def create_server(
             },
         )
 
-    @server.tool(name="observability_audit")
+    @server.tool(
+        name="observability_audit",
+        description=(
+            "Return recent audit log entries for write operations performed through this server."
+        ),
+    )
     def observability_audit() -> object:
         return _run_tool(
             "observability_audit",
@@ -6021,7 +6204,10 @@ def create_server(
             },
         )
 
-    @server.tool(name="observability_health")
+    @server.tool(
+        name="observability_health",
+        description="Return this MCP server's health status.",
+    )
     def observability_health() -> object:
         readiness_state = {"configured": readiness_check is not None, "status": "not_configured"}
         if readiness_check is not None:
@@ -6102,7 +6288,10 @@ def create_server(
             },
         )
 
-    @server.tool(name="sql_execute")
+    @server.tool(
+        name="sql_execute",
+        description="Execute a write SQL statement (insert/update/delete) against FairCom.",
+    )
     def sql_execute(
         statement: str | None = None,
         params: list[object] | None = None,

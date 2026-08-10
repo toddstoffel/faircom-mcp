@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from faircom_mcp.api.client import FaircomAPIClient
+from faircom_mcp.errors import UpstreamAPIError
 
 
 class TableAdapter:
@@ -80,7 +81,12 @@ class TableAdapter:
 
     def describe_table(self, table_name: str) -> Any:
         payload = {"tableNames": [table_name]}
-        result = self._client.post_action("describeTables", payload)
+        try:
+            result = self._client.post_action("describeTables", payload)
+        except UpstreamAPIError:
+            # describeTables (JSON DB API) only manages normal tables; integration
+            # tables live in the JSON Hub API instead, so a not-found here isn't final.
+            return self._describe_integration_table_fallback(table_name)
         if not isinstance(result, dict):
             return result
 
@@ -89,7 +95,48 @@ class TableAdapter:
         )
         if isinstance(data, list) and data:
             return data[0]
-        return result
+        return self._describe_integration_table_fallback(table_name)
+
+    def _describe_integration_table_fallback(self, table_name: str) -> Any:
+        try:
+            hub_result = self._client.hub_action(
+                "describeIntegrationTables", {"tables": [{"tableName": table_name}]}
+            )
+        except UpstreamAPIError:
+            return {}
+        record = self._extract_integration_table_record(hub_result, table_name)
+        if record is None:
+            return {}
+        normalized = dict(record)
+        fields = record.get("fields")
+        if isinstance(fields, list) and "columns" not in normalized:
+            normalized["columns"] = fields
+        return normalized
+
+    @staticmethod
+    def _extract_integration_table_record(value: Any, table_name: str) -> dict[str, Any] | None:
+        candidates: list[Any] = []
+        if isinstance(value, dict):
+            for key in ("tables", "result", "results", "data", "items"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    candidates.extend(nested)
+                elif isinstance(nested, dict):
+                    inner = nested.get("data")
+                    if isinstance(inner, list):
+                        candidates.extend(inner)
+            if not candidates:
+                candidates.append(value)
+        elif isinstance(value, list):
+            candidates.extend(value)
+
+        for candidate in candidates:
+            if isinstance(candidate, dict) and candidate.get("tableName") == table_name:
+                return candidate
+        for candidate in candidates:
+            if isinstance(candidate, dict) and "tableName" in candidate:
+                return candidate
+        return None
 
     def list_table_columns(self, table_name: str) -> dict[str, Any]:
         description = self.describe_table(table_name)

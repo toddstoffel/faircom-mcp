@@ -348,9 +348,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "action": "listInputs",
         "payload": {"connectorNameLike": "modbus%"},
     }
-    assert server.tools["describe_inputs"](payload={"connectorNames": ["modbus_1"]}) == {
+    assert server.tools["describe_inputs"](payload={"inputNames": ["modbus_1"]}) == {
         "action": "describeInputs",
-        "payload": {"connectorNames": ["modbus_1"]},
+        "payload": {"inputNames": ["modbus_1"]},
     }
     assert server.tools["list_services"](payload={"serviceNames": ["modbus"]}) == {
         "action": "listServices",
@@ -713,7 +713,7 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     assert list_table_indexes_calls == ["demo"]
     assert connector_calls == [
         ("listInputs", {"connectorNameLike": "modbus%"}),
-        ("describeInputs", {"connectorNames": ["modbus_1"]}),
+        ("describeInputs", {"inputNames": ["modbus_1"]}),
         ("createInput", {"connectorName": "modbus_1", "inputName": "modbus_1"}),
         ("listOutputs", {"connectorNameLike": "mqtt%"}),
         ("describeOutputs", {"connectorNames": ["mqtt_1"]}),

@@ -352,7 +352,7 @@ FairCom MCP exposes connector inspection and lifecycle operations for FairCom Ed
 Read-oriented connector tools:
 
 - `list_inputs(payload?)`
-- `describe_inputs(payload?)`
+- `describe_inputs(payload)` — `payload.inputNames` (non-empty list of strings) is required; call `list_inputs` first to discover names.
 - `list_outputs(payload?)`
 - `describe_outputs(payload?)`
 
@@ -489,8 +489,8 @@ FAIRCOM_SQL_DENYLIST=DROP,TRUNCATE,ALTER
 | Tool | Purpose | Safety |
 |---|---|---|
 | `list_tables(name_like?)` | Discover tables | Read-only |
-| `describe_table(table_name)` | Get columns, indexes, constraints | Read-only |
-| `list_table_columns(table_name)` | Column names and types | Read-only |
+| `describe_table(table_name)` | Get columns, indexes, constraints (falls back to integration table metadata) | Read-only |
+| `list_table_columns(table_name)` | Column names and types (works for integration tables too) | Read-only |
 | `list_table_indexes(table_name)` | Index details | Read-only |
 | `sql_query(statement, params?)` | Execute SELECT (read-only) | Read-only |
 | `sql_query_page(statement, params?, page, page_size)` | Paginated SELECT | Read-only |
@@ -538,7 +538,7 @@ Important, field-tested gotchas:
 - Declare every target field in `create_integration_table`'s `fields` array up front. Neither the transform nor `alter_integration_table` can reliably add fields to an existing table afterward.
 - Put `databaseName` and `ownerName` inside each transform step object, not only at the table's top level, or FairCom rejects the step with a missing-default-database error.
 - A `transformStepMethod` of `"javascript"` requires `transformStepService: "v8TransformService"` alongside it.
-- Set `input_fields`/`output_field_definitions` on `register_code_package` for `integrationTableTransform` packages. Without `metadata.inputFields`/`metadata.outputFieldDefinitions`, the code package is created successfully but the FairCom Edge Explorer wizard reports "no suitable Integration Table Transform Code Packages" and cannot find it — the Code Editor GUI sets these automatically, but the Code Package API does not. `register_code_package` returns a `warnings` entry naming the missing property when this happens.
+- Set `input_fields`/`output_field_definitions` on `register_code_package` for `integrationTableTransform` packages. Without `metadata.inputFields`/`metadata.outputFieldDefinitions`, the code package is created successfully but the FairCom Edge Explorer wizard reports "no suitable Integration Table Transform Code Packages" and cannot find it — the Code Editor GUI sets these automatically, but the Code Package API does not. `register_code_package` returns a `warnings` entry naming the missing property when this happens. **Unverified:** the exact shape this tool writes (`metadata.inputFields`/`metadata.outputFieldDefinitions`) has not been confirmed to resolve wizard visibility in all environments — `register_code_package` always includes an `UNVERIFIED` warning when these fields are set as a reminder to check the wizard after registering. If the wizard still can't find the package, compare against the metadata a Code Editor-created package actually has.
 
 ## Common AI Client Mistakes (And Fixes)
 
