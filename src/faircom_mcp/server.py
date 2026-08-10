@@ -4160,13 +4160,18 @@ def create_server(
         database_name: str,
         owner_name: str,
     ) -> bool:
-        result = connector_adapter.describe_code_packages(
-            {
-                "databaseName": database_name,
-                "ownerName": owner_name,
-                "codeNames": [code_name],
-            }
-        )
+        try:
+            result = connector_adapter.describe_code_packages(
+                {
+                    "databaseName": database_name,
+                    "ownerName": owner_name,
+                    "codeNames": [code_name],
+                }
+            )
+        except UpstreamAPIError:
+            # FairCom's describeCodePackages raises an application error (rather than
+            # returning an empty list) when the code package name doesn't exist yet.
+            return False
         if not isinstance(result, dict):
             return False
         nested = result.get("result")
