@@ -68,9 +68,18 @@ def transform_connector_request(
 
         transformed.pop("connectorName", None)
 
+    if action in {"createOutput", "alterOutput", "deleteOutput"}:
+        output_name = transformed.get("outputName")
+        if not isinstance(output_name, str) or not output_name.strip():
+            connector_name = transformed.get("connectorName")
+            if isinstance(connector_name, str) and connector_name.strip():
+                transformed["outputName"] = connector_name.strip()
+
+        transformed.pop("connectorName", None)
+
     service_name = transformed.get("serviceName")
     if (
-        action in {"createInput", "alterInput"}
+        action in {"createInput", "alterInput", "createOutput", "alterOutput"}
         and isinstance(service_name, str)
         and service_name.strip().lower() == "modbus"
     ):
@@ -131,10 +140,16 @@ class ConnectorAdapter:
         return self._client.hub_action("describeOutputs", payload)
 
     def create_output(self, payload: Mapping[str, Any]) -> Any:
-        return self._client.hub_action("createOutput", payload)
+        return self._client.hub_action(
+            "createOutput",
+            transform_connector_request("createOutput", payload),
+        )
 
     def alter_output(self, payload: Mapping[str, Any]) -> Any:
-        return self._client.hub_action("alterOutput", payload)
+        return self._client.hub_action(
+            "alterOutput",
+            transform_connector_request("alterOutput", payload),
+        )
 
     def delete_output(self, payload: Mapping[str, Any]) -> Any:
         return self._client.hub_action("deleteOutput", payload)
@@ -191,3 +206,18 @@ class ConnectorAdapter:
 
     def describe_code_package_history(self, payload: Mapping[str, Any]) -> Any:
         return self._client.admin_action("describeCodePackageHistory", payload)
+
+    # Per https://documentation.faircom.com/en_US/apis/faircom-edge-apis, MQTT delivery
+    # runs through the "mq" API's topic actions, not through createOutput/alterOutput.
+    # configureTopic is an upsert (create-or-update), unlike createInput/createOutput.
+    def configure_topic(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.mq_action("configureTopic", payload)
+
+    def delete_topic(self, payload: Mapping[str, Any]) -> Any:
+        return self._client.mq_action("deleteTopic", payload)
+
+    def describe_topics(self, payload: Mapping[str, Any] | None = None) -> Any:
+        return self._client.mq_action("describeTopics", payload)
+
+    def list_topics(self, payload: Mapping[str, Any] | None = None) -> Any:
+        return self._client.mq_action("listTopics", payload)

@@ -249,6 +249,15 @@ class FaircomAPIClient:
     ) -> Any:
         return self.json_action("hub", action, payload, path=path)
 
+    def mq_action(
+        self,
+        action: str,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        path: str = "/api/v1/action",
+    ) -> Any:
+        return self.json_action("mq", action, payload, path=path)
+
     @staticmethod
     def _is_retryable_read(method: str, *, idempotent: bool | None) -> bool:
         if idempotent is not None:
@@ -451,6 +460,10 @@ class FaircomAPIClient:
             "describeCodePackages",
             "listCodePackageHistory",
             "describeCodePackageHistory",
+            "configureTopic",
+            "deleteTopic",
+            "describeTopics",
+            "listTopics",
         }
         hint: str | None = None
         if request_action in connector_actions:

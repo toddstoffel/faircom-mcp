@@ -164,20 +164,13 @@ class ModbusConnectorPayload(TypedDict, total=False):
     inputName: str
 
 
-class MqttConnectorPayload(TypedDict, total=False):
-    connectorName: Required[str]
-    serviceName: Required[Literal["mqtt"]]
-    inputName: str
-    topic: str
-
-
 class GenericConnectorPayload(TypedDict, total=False):
     connectorName: Required[str]
     inputName: str
     serviceName: str
 
 
-ConnectorPayload = ModbusConnectorPayload | MqttConnectorPayload | GenericConnectorPayload
+ConnectorPayload = ModbusConnectorPayload | GenericConnectorPayload
 ConnectorPayloadBatch = list[ConnectorPayload]
 
 _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
@@ -276,18 +269,70 @@ _CONNECTOR_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
             ],
         },
     },
-    "mqtt": {
-        "service_name": "mqtt",
-        "required": ["connectorName", "serviceName"],
-        "description": "MQTT connector payload baseline schema (local validation profile).",
+}
+
+# Separate from _CONNECTOR_SCHEMA_REGISTRY (createInput/alterInput) because output payloads
+# use a different shape: outputName/sourceFields instead of inputName/propertyMapList, and
+# connector-specific settings nested under "settings" rather than the input's flat properties.
+_CONNECTOR_OUTPUT_SCHEMA_REGISTRY: dict[str, dict[str, object]] = {
+    "modbus": {
+        "service_name": "modbus",
+        "required": ["outputName", "serviceName", "tableName", "sourceFields", "settings"],
+        "description": "Modbus output connector payload schema (local validation profile).",
         "properties": {
-            "connectorName": {"type": "string", "minLength": 1},
-            "serviceName": {"type": "string", "const": "mqtt"},
+            "outputName": {"type": "string", "minLength": 1},
+            "serviceName": {"type": "string", "const": "modbus"},
+            "databaseName": {"type": "string", "minLength": 1},
+            "ownerName": {"type": "string", "minLength": 1},
+            "tableName": {"type": "string", "minLength": 1},
+            "sourceFields": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+            "settings": {
+                "type": "object",
+                "properties": {
+                    "modbusProtocol": {"type": "string"},
+                    "modbusServer": {"type": "string", "minLength": 1},
+                    "modbusServerPort": {"type": ["integer", "number"]},
+                    "propertyMapList": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "propertyPath": {"type": "string", "minLength": 1},
+                                "modbusDataAddress": {"type": ["integer", "number"]},
+                                "modbusDataAccess": {
+                                    "type": "string",
+                                    "enum": _MODBUS_DATA_ACCESS_ENUM,
+                                },
+                                "modbusUnitId": {"type": ["integer", "number"]},
+                                "modbusDataLen": {"type": ["integer", "number"]},
+                            },
+                        },
+                    },
+                },
+            },
         },
         "example": {
-            "connectorName": "mqtt_telemetry_input",
-            "serviceName": "mqtt",
-            "topic": "factory/line-1/telemetry",
+            "outputName": "writeTemperatureToModbus",
+            "serviceName": "modbus",
+            "databaseName": "faircom",
+            "ownerName": "admin",
+            "tableName": "modbusTableTCP",
+            "sourceFields": ["source_payload"],
+            "settings": {
+                "modbusProtocol": "TCP",
+                "modbusServer": "127.0.0.1",
+                "modbusServerPort": 502,
+                "propertyMapList": [
+                    {
+                        "propertyPath": "source_payload.temperature",
+                        "modbusDataAddress": 1399,
+                        "modbusDataAccess": "holdingregister",
+                        "modbusUnitId": 5,
+                        "modbusDataLen": 1,
+                    }
+                ],
+            },
         },
     },
 }
@@ -383,7 +428,7 @@ def create_server(
     def _connector_target_name(payload: object) -> str | None:
         if not isinstance(payload, dict):
             return None
-        for key in ("connectorName", "inputName", "tableName", "codeName"):
+        for key in ("connectorName", "outputName", "inputName", "tableName", "codeName", "topic"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -850,6 +895,56 @@ def create_server(
             ),
         }
 
+    def _check_service_registration(
+        *,
+        action: str,
+        service_name: str,
+    ) -> tuple[list[dict[str, object]], list[str]]:
+        if action not in {"createInput", "alterInput", "createOutput", "alterOutput"}:
+            return [], []
+
+        registered = _list_service_runtime_state()
+        if not registered:
+            # Could not determine the registered service list (or the call failed); skip
+            # rather than block writes on a lookup we have no data for.
+            return [], []
+
+        entry = registered.get(service_name)
+        if entry is None:
+            registered_names = sorted(
+                {
+                    str(info["service_name"])
+                    for info in registered.values()
+                    if info.get("service_name")
+                }
+            )
+            return (
+                [
+                    {
+                        "path": "payload.serviceName",
+                        "json_pointer": "/payload/serviceName",
+                        "reason": "unregistered_service",
+                        "message": (
+                            f"serviceName '{service_name}' is not a registered integration "
+                            "service on this FairCom Edge instance."
+                        ),
+                        "registered_services": registered_names,
+                    }
+                ],
+                [],
+            )
+
+        if entry.get("active") is False:
+            return (
+                [],
+                [
+                    f"Service '{service_name}' is registered but disabled. Enable it with "
+                    "manage_service (command=startup) before writing this connector."
+                ],
+            )
+
+        return [], []
+
     def _validate_connector_schema(
         *,
         tool_name: str,
@@ -945,13 +1040,21 @@ def create_server(
             }
 
         service_name = service_name_raw.strip().lower()
-        schema = _CONNECTOR_SCHEMA_REGISTRY.get(service_name)
+        service_errors, service_warnings = _check_service_registration(
+            action=action,
+            service_name=service_name,
+        )
+        is_output_action = action in {"createOutput", "alterOutput"}
+        schema_registry = (
+            _CONNECTOR_OUTPUT_SCHEMA_REGISTRY if is_output_action else (_CONNECTOR_SCHEMA_REGISTRY)
+        )
+        schema = schema_registry.get(service_name)
         if schema is None:
             return {
-                "status": "unvalidated",
+                "status": "invalid" if service_errors else "unvalidated",
                 "service_name": service_name,
-                "errors": [],
-                "warnings": [],
+                "errors": service_errors,
+                "warnings": service_warnings,
             }
 
         enforce_required_fields = action in {
@@ -965,8 +1068,8 @@ def create_server(
             "alterInput",
         }
 
-        errors: list[dict[str, object]] = []
-        warnings: list[str] = []
+        errors: list[dict[str, object]] = list(service_errors)
+        warnings: list[str] = list(service_warnings)
 
         def _to_json_pointer(path: str) -> str:
             # Convert dot/bracket path form (payload.a[0].b) into JSON Pointer.
@@ -1397,11 +1500,17 @@ def create_server(
 
         normalized_payload = dict(payload)
         is_input_action = action in {"createInput", "alterInput", "deleteInput"}
+        is_output_action = action in {"createOutput", "alterOutput", "deleteOutput"}
         connector_name = normalized_payload.get("connectorName")
         if (not isinstance(connector_name, str) or not connector_name.strip()) and is_input_action:
             input_name = normalized_payload.get("inputName")
             if isinstance(input_name, str) and input_name.strip():
                 connector_name = input_name.strip()
+                normalized_payload["connectorName"] = connector_name
+        if (not isinstance(connector_name, str) or not connector_name.strip()) and is_output_action:
+            output_name = normalized_payload.get("outputName")
+            if isinstance(output_name, str) and output_name.strip():
+                connector_name = output_name.strip()
                 normalized_payload["connectorName"] = connector_name
 
         if not isinstance(connector_name, str) or not connector_name.strip():
@@ -1412,13 +1521,15 @@ def create_server(
                     "payload": "object (required)",
                     "payload.connectorName": "string (required)",
                     "payload.inputName": "string (accepted alias for input actions)",
+                    "payload.outputName": "string (accepted alias for output actions)",
                     "confirm_write": "true for non-dry-run changes",
                     "dry_run": "true to preview change",
                 },
                 received_args={"payload": payload, "action": action},
                 suggested_fix=(
                     "Provide payload.connectorName with a non-empty connector name. "
-                    "For input actions, payload.inputName is also accepted."
+                    "For input actions, payload.inputName is also accepted; for output "
+                    "actions, payload.outputName is also accepted."
                 ),
                 example_payload={
                     "name": tool_name,
@@ -1434,6 +1545,10 @@ def create_server(
             input_name = normalized_payload.get("inputName")
             if not isinstance(input_name, str) or not input_name.strip():
                 normalized_payload["inputName"] = connector_name
+        if is_output_action:
+            output_name = normalized_payload.get("outputName")
+            if not isinstance(output_name, str) or not output_name.strip():
+                normalized_payload["outputName"] = connector_name
 
         service_name = normalized_payload.get("serviceName")
         if isinstance(service_name, str) and service_name.strip().lower() == "modbus":
@@ -1500,6 +1615,14 @@ def create_server(
                     normalized_entries.append(normalized_entry)
 
                 normalized_payload["propertyMapList"] = normalized_entries
+
+        if is_output_action:
+            # Output payloads validate against the nested-settings canonical shape (matching
+            # what FairCom's wire format expects), so nest flat convenience properties before
+            # validation runs instead of only at write/preview time.
+            transformed_for_validation = transform_connector_request(action, normalized_payload)
+            if transformed_for_validation is not None:
+                normalized_payload = transformed_for_validation
 
         validation = _validate_connector_schema(
             tool_name=tool_name,
@@ -3628,6 +3751,441 @@ def create_server(
             return enriched
         return result
 
+    @server.tool(name="list_topics")
+    def list_topics(payload: dict[str, object] | None = None) -> object:
+        return _run_tool(
+            "list_topics",
+            "metadata",
+            lambda: connector_adapter.list_topics(payload),
+        )
+
+    @server.tool(name="describe_topics")
+    def describe_topics(payload: dict[str, object] | None = None) -> object:
+        return _run_tool(
+            "describe_topics",
+            "metadata",
+            lambda: connector_adapter.describe_topics(payload),
+        )
+
+    def _require_topic_payload(
+        *,
+        tool_name: str,
+        payload: dict[str, object] | None,
+        require_binding_fields: bool,
+    ) -> dict[str, object]:
+        if payload is None or not isinstance(payload, dict) or not payload:
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="payload is required",
+                expected_args={
+                    "payload": "object (required)",
+                    "confirm_write": "true for non-dry-run changes",
+                    "dry_run": "true to preview change",
+                },
+                received_args={"payload": payload},
+                suggested_fix="Provide a non-empty MQ topic payload object.",
+                example_payload={
+                    "name": tool_name,
+                    "arguments": {
+                        "payload": {
+                            "topic": "factory/line-1/mixing_tank/temperature",
+                            "databaseName": "faircom",
+                            "tableName": "modbus_mixing_tank_temp",
+                        }
+                    },
+                },
+            )
+
+        topic = payload.get("topic")
+        if not isinstance(topic, str) or not topic.strip():
+            raise _validation_failure(
+                tool_name=tool_name,
+                message="payload.topic is required and must be non-empty",
+                expected_args={"payload.topic": "string (required)"},
+                received_args={"payload": payload},
+                suggested_fix="Provide payload.topic naming the MQTT topic to configure.",
+                example_payload={
+                    "name": tool_name,
+                    "arguments": {
+                        "payload": {
+                            "topic": "factory/line-1/mixing_tank/temperature",
+                            "databaseName": "faircom",
+                            "tableName": "modbus_mixing_tank_temp",
+                        }
+                    },
+                },
+            )
+
+        if require_binding_fields:
+            for key in ("tableName", "databaseName"):
+                value = payload.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    raise _validation_failure(
+                        tool_name=tool_name,
+                        message=f"payload.{key} is required and must be non-empty",
+                        expected_args={f"payload.{key}": "string (required)"},
+                        received_args={"payload": payload},
+                        suggested_fix=(
+                            f"Provide payload.{key} to bind the topic to an integration table."
+                        ),
+                        example_payload={
+                            "name": tool_name,
+                            "arguments": {
+                                "payload": {
+                                    "topic": "factory/line-1/mixing_tank/temperature",
+                                    "databaseName": "faircom",
+                                    "tableName": "modbus_mixing_tank_temp",
+                                }
+                            },
+                        },
+                    )
+
+        return dict(payload)
+
+    @server.tool(name="configure_topic")
+    def configure_topic(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        # configureTopic is an upsert (create-or-update a topic binding), unlike
+        # createInput/createOutput, so it is not gated the same way create_* tools are.
+        _missing_value = object()
+
+        def _extract_topic_records(value: object) -> list[dict[str, object]]:
+            if isinstance(value, list):
+                return [entry for entry in value if isinstance(entry, dict)]
+            if not isinstance(value, dict):
+                return []
+            direct_records: list[dict[str, object]] = []
+            for key in ("topics", "results", "data", "items"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    direct_records.extend(entry for entry in nested if isinstance(entry, dict))
+            if direct_records:
+                return direct_records
+            return [value]
+
+        def _coerce_comparable(value: object) -> object:
+            if isinstance(value, str):
+                stripped = value.strip()
+                lowered = stripped.lower()
+                if lowered in {"true", "yes", "on", "enabled"}:
+                    return True
+                if lowered in {"false", "no", "off", "disabled"}:
+                    return False
+                if stripped.isdigit():
+                    try:
+                        return int(stripped)
+                    except ValueError:
+                        return stripped
+                return stripped
+            if isinstance(value, float) and value.is_integer():
+                return int(value)
+            return value
+
+        def _verify_configure_topic_mutation(resolved: dict[str, object]) -> dict[str, object]:
+            verify_timeout_seconds = 6.0
+            verify_poll_interval_seconds = 0.3
+            topic = resolved.get("topic")
+            if not isinstance(topic, str) or not topic.strip():
+                return {
+                    "status": "skipped",
+                    "reason": "missing_topic_identity",
+                    "message": "payload.topic was not available for verification",
+                }
+
+            verify_keys = [
+                key
+                for key in (
+                    "tableName",
+                    "databaseName",
+                    "transformName",
+                    "downgradeQoS",
+                    "maxDeliveryRatePerSecond",
+                )
+                if key in resolved
+            ]
+            if not verify_keys:
+                return {
+                    "status": "skipped",
+                    "reason": "no_verifiable_fields",
+                    "message": "No verifiable fields were present in the payload",
+                }
+
+            deadline = time.monotonic() + verify_timeout_seconds
+            attempt_count = 0
+            latest_mismatches: list[dict[str, object]] = []
+            latest_record: dict[str, object] | None = None
+            latest_reason = "topic_not_found"
+
+            while True:
+                attempt_count += 1
+                described = connector_adapter.describe_topics({"topics": [topic]})
+                records = _extract_topic_records(described)
+                matching_record: dict[str, object] | None = None
+                for record in records:
+                    candidate = record.get("topic")
+                    if isinstance(candidate, str) and candidate.strip() == topic:
+                        matching_record = record
+                        break
+                if matching_record is None and records:
+                    matching_record = records[0]
+
+                if matching_record is not None:
+                    latest_record = matching_record
+                    mismatches: list[dict[str, object]] = []
+                    comparable_fields: list[str] = []
+                    for key in verify_keys:
+                        expected = resolved.get(key)
+                        observed = matching_record.get(key, _missing_value)
+                        if observed is _missing_value:
+                            continue
+                        comparable_fields.append(key)
+                        if _coerce_comparable(observed) != _coerce_comparable(expected):
+                            mismatches.append(
+                                {"field": key, "expected": expected, "observed": observed}
+                            )
+
+                    if comparable_fields and not mismatches:
+                        return {
+                            "status": "verified",
+                            "topic": topic,
+                            "verified_fields": comparable_fields,
+                            "attempts": attempt_count,
+                            "poll_timeout_seconds": verify_timeout_seconds,
+                        }
+
+                    if comparable_fields:
+                        latest_reason = "mutation_not_applied"
+                        latest_mismatches = mismatches
+                    else:
+                        latest_reason = "verification_fields_not_observable"
+
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(verify_poll_interval_seconds)
+
+            raise UpstreamAPIError(
+                "configure_topic write acknowledged but post-commit verification timed out",
+                details={
+                    "errorCode": 0,
+                    "verification_error_code": "post_commit_verification_timeout",
+                    "request_action": "configureTopic",
+                    "topic": topic,
+                    "reason_code": latest_reason,
+                    "mismatches": latest_mismatches,
+                    "verification_source": latest_record,
+                    "verification_attempts": attempt_count,
+                    "verification_timeout_seconds": verify_timeout_seconds,
+                },
+                retryable=False,
+                hint=(
+                    "The write call returned success but read-after-write verification did not "
+                    "converge before timeout. Confirm the latest state with describe_topics "
+                    "before retrying."
+                ),
+            )
+
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={
+                "tool": "configure_topic",
+                "action": "configureTopic",
+                "target": _connector_target_name(payload),
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
+        )
+        if dry_run:
+            return _run_tool(
+                "configure_topic",
+                "connector",
+                lambda: {
+                    "mode": "dry_run",
+                    "status": "success",
+                    "tool_name": "configure_topic",
+                    "action": "configureTopic",
+                    "payload": payload,
+                    "execution_status": "not_executed",
+                    "preview": "configureTopic is an upsert; would create or update this topic",
+                    "warnings": [
+                        "Dry run is a local preview only and does not call FairCom backend APIs."
+                    ],
+                },
+            )
+        try:
+            resolved_payload = _require_topic_payload(
+                tool_name="configure_topic",
+                payload=payload,
+                require_binding_fields=True,
+            )
+            if not confirm_write:
+                raise _validation_failure(
+                    tool_name="configure_topic",
+                    message="configure_topic requires confirm_write=True",
+                    expected_args={
+                        "payload": "object (required)",
+                        "confirm_write": "true for non-dry-run changes",
+                        "dry_run": "true to preview change",
+                    },
+                    received_args={
+                        "payload": resolved_payload,
+                        "confirm_write": confirm_write,
+                        "dry_run": dry_run,
+                    },
+                    suggested_fix=(
+                        "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                    ),
+                    example_payload={
+                        "name": "configure_topic",
+                        "arguments": {
+                            "payload": {
+                                "topic": "factory/line-1/mixing_tank/temperature",
+                                "databaseName": "faircom",
+                                "tableName": "modbus_mixing_tank_temp",
+                            },
+                            "confirm_write": True,
+                        },
+                    },
+                    reason_code="missing_write_confirmation",
+                )
+        except ValidationFailure as exc:
+            _record_connector_validation_rejection(
+                tool_name="configure_topic",
+                action="configureTopic",
+                payload=payload,
+                exc=exc,
+            )
+            raise
+
+        verification: dict[str, object] | None = None
+
+        def _post_commit_verify(_result: object) -> None:
+            nonlocal verification
+            verification = _verify_configure_topic_mutation(resolved_payload)
+
+        result = _execute_connector_write(
+            tool_name="configure_topic",
+            action="configureTopic",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "configure_topic",
+                "connector",
+                lambda: connector_adapter.configure_topic(resolved_payload),
+            ),
+            post_commit_verifier=_post_commit_verify,
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": bool(
+                        verification and verification.get("status") == "verified"
+                    ),
+                    "mutation_verification": verification,
+                }
+            )
+            return enriched
+        return result
+
+    @server.tool(name="delete_topic")
+    def delete_topic(
+        payload: dict[str, object] | None = None,
+        confirm_write: bool = False,
+        dry_run: bool = False,
+    ) -> object:
+        audit_log.record(
+            event_type="connector_write_attempt",
+            details={
+                "tool": "delete_topic",
+                "action": "deleteTopic",
+                "target": _connector_target_name(payload),
+                "dry_run": dry_run,
+                "confirm_write": confirm_write,
+            },
+        )
+        if dry_run:
+            return _run_tool(
+                "delete_topic",
+                "connector",
+                lambda: {
+                    "mode": "dry_run",
+                    "status": "success",
+                    "tool_name": "delete_topic",
+                    "action": "deleteTopic",
+                    "payload": payload,
+                    "execution_status": "not_executed",
+                    "preview": "Topic would be deleted",
+                    "warnings": [
+                        "Dry run is a local preview only and does not call FairCom backend APIs."
+                    ],
+                },
+            )
+        try:
+            resolved_payload = _require_topic_payload(
+                tool_name="delete_topic",
+                payload=payload,
+                require_binding_fields=False,
+            )
+            if not confirm_write:
+                raise _validation_failure(
+                    tool_name="delete_topic",
+                    message="delete_topic requires confirm_write=True",
+                    expected_args={
+                        "payload": "object (required)",
+                        "confirm_write": "true for non-dry-run changes",
+                        "dry_run": "true to preview change",
+                    },
+                    received_args={
+                        "payload": resolved_payload,
+                        "confirm_write": confirm_write,
+                        "dry_run": dry_run,
+                    },
+                    suggested_fix=(
+                        "Set confirm_write=true to apply the change or dry_run=true to preview it."
+                    ),
+                    example_payload={
+                        "name": "delete_topic",
+                        "arguments": {
+                            "payload": {"topic": "factory/line-1/mixing_tank/temperature"},
+                            "confirm_write": True,
+                        },
+                    },
+                    reason_code="missing_write_confirmation",
+                )
+        except ValidationFailure as exc:
+            _record_connector_validation_rejection(
+                tool_name="delete_topic",
+                action="deleteTopic",
+                payload=payload,
+                exc=exc,
+            )
+            raise
+        result = _execute_connector_write(
+            tool_name="delete_topic",
+            action="deleteTopic",
+            target=_connector_target_name(resolved_payload),
+            writer=lambda: _run_tool(
+                "delete_topic",
+                "connector",
+                lambda: connector_adapter.delete_topic(resolved_payload),
+            ),
+        )
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched.update(
+                {
+                    "dry_run_applied": False,
+                    "confirm_write_required": True,
+                    "mutation_applied": True,
+                }
+            )
+            return enriched
+        return result
+
     @server.tool(name="sql_query")
     def sql_query(
         statement: str | None = None,
@@ -3823,6 +4381,10 @@ def create_server(
                         "confirm_write",
                         "dry_run",
                     ],
+                    "list_topics": ["payload"],
+                    "describe_topics": ["payload"],
+                    "configure_topic": ["payload", "confirm_write", "dry_run"],
+                    "delete_topic": ["payload", "confirm_write", "dry_run"],
                     "list_code_packages": [
                         "name_like",
                         "database_name",
@@ -3847,6 +4409,8 @@ def create_server(
                         "comment",
                         "description",
                         "metadata",
+                        "input_fields",
+                        "output_field_definitions",
                         "confirm_write",
                         "dry_run",
                     ],
@@ -3950,8 +4514,26 @@ def create_server(
                         "name": "create_output",
                         "arguments": {
                             "payload": {
-                                "connectorName": "mqtt_telemetry_output",
-                                "serviceName": "mqtt",
+                                "outputName": "writeTemperatureToModbus",
+                                "serviceName": "modbus",
+                                "databaseName": "faircom",
+                                "ownerName": "admin",
+                                "tableName": "modbusTableTCP",
+                                "sourceFields": ["source_payload"],
+                                "settings": {
+                                    "modbusProtocol": "TCP",
+                                    "modbusServer": "127.0.0.1",
+                                    "modbusServerPort": 502,
+                                    "propertyMapList": [
+                                        {
+                                            "propertyPath": "source_payload.temperature",
+                                            "modbusDataAddress": 1399,
+                                            "modbusDataAccess": "holdingregister",
+                                            "modbusUnitId": 5,
+                                            "modbusDataLen": 1,
+                                        }
+                                    ],
+                                },
                             },
                             "confirm_write": True,
                         },
@@ -3982,6 +4564,8 @@ def create_server(
                             "code_name": "decode_mixing_tank",
                             "code": "record.value = record.source_payload.value;",
                             "code_type": "integrationTableTransform",
+                            "input_fields": ["source_payload.value"],
+                            "output_field_definitions": [{"name": "value", "type": "double"}],
                             "confirm_write": True,
                         },
                     },
@@ -4022,25 +4606,36 @@ def create_server(
                 },
                 "connector_payload_profiles": connector_contract_profiles,
                 "connector_schema_profiles": sorted(_CONNECTOR_SCHEMA_REGISTRY.keys()),
+                "connector_output_schema_profiles": sorted(
+                    _CONNECTOR_OUTPUT_SCHEMA_REGISTRY.keys()
+                ),
             },
         )
 
     @server.tool(name="describe_connector_schema")
-    def describe_connector_schema(service_name: str) -> object:
+    def describe_connector_schema(service_name: str, direction: str = "input") -> object:
         normalized = service_name.strip().lower()
-        schema = _CONNECTOR_SCHEMA_REGISTRY.get(normalized)
+        normalized_direction = direction.strip().lower() if direction else "input"
+        registry = (
+            _CONNECTOR_OUTPUT_SCHEMA_REGISTRY
+            if normalized_direction == "output"
+            else _CONNECTOR_SCHEMA_REGISTRY
+        )
+        schema = registry.get(normalized)
         if schema is None:
+            supported = sorted(registry.keys())
             raise _validation_failure(
                 tool_name="describe_connector_schema",
                 message="Unsupported connector service_name",
                 expected_args={
-                    "service_name": f"one of {sorted(_CONNECTOR_SCHEMA_REGISTRY.keys())}",
+                    "service_name": f"one of {supported} for direction={normalized_direction!r}",
+                    "direction": "input or output",
                 },
-                received_args={"service_name": service_name},
-                suggested_fix="Call with a supported connector profile name.",
+                received_args={"service_name": service_name, "direction": direction},
+                suggested_fix="Call with a supported connector profile name and direction.",
                 example_payload={
                     "name": "describe_connector_schema",
-                    "arguments": {"service_name": "modbus"},
+                    "arguments": {"service_name": "modbus", "direction": "input"},
                 },
             )
 
@@ -4049,6 +4644,7 @@ def create_server(
             "admin",
             lambda: {
                 "service_name": normalized,
+                "direction": normalized_direction,
                 "schema_version": "2026-08-06",
                 "schema": schema,
                 "known_good_example": schema.get("example"),
@@ -4245,6 +4841,7 @@ def create_server(
                 "allowed_values",
                 "nearest_match",
                 "corrected_snippet",
+                "registered_services",
             }
             sanitized_errors: list[dict[str, object]] = []
             for item in raw_errors:
@@ -4529,12 +5126,36 @@ def create_server(
         comment: str = "",
         description: str = "",
         metadata: dict[str, object] | None = None,
+        input_fields: list[str] | None = None,
+        output_field_definitions: list[dict[str, object]] | None = None,
         confirm_write: bool = False,
         dry_run: bool = False,
     ) -> object:
         normalized_name = code_name.strip()
         normalized_code = code.strip()
         normalized_type = code_type.strip()
+
+        resolved_metadata: dict[str, object] = dict(metadata) if metadata else {}
+        if input_fields is not None:
+            resolved_metadata["inputFields"] = input_fields
+        if output_field_definitions is not None:
+            resolved_metadata["outputFieldDefinitions"] = output_field_definitions
+
+        metadata_warnings: list[str] = []
+        if normalized_type == "integrationTableTransform":
+            if not resolved_metadata.get("inputFields"):
+                metadata_warnings.append(
+                    "metadata.inputFields is not set. The FairCom Edge Explorer wizard cannot "
+                    "find this code package as a usable Integration Table Transform without it. "
+                    "Pass input_fields (list of field names the transform reads)."
+                )
+            if not resolved_metadata.get("outputFieldDefinitions"):
+                metadata_warnings.append(
+                    "metadata.outputFieldDefinitions is not set. The FairCom Edge Explorer "
+                    "wizard cannot find this code package as a usable Integration Table "
+                    "Transform without it. Pass output_field_definitions (list of "
+                    "{name, type} objects the transform writes)."
+                )
 
         audit_log.record(
             event_type="code_package_write_attempt",
@@ -4631,6 +5252,7 @@ def create_server(
                     "preview": "createCodePackage or alterCodePackage would execute",
                     "warnings": [
                         "Dry run is a local preview only and does not call FairCom backend APIs.",
+                        *metadata_warnings,
                     ],
                     "hint": "Set confirm_write=True to apply code package registration.",
                 }
@@ -4684,7 +5306,7 @@ def create_server(
             "codeStatus": code_status,
             "comment": comment,
             "description": description,
-            "metadata": metadata or {},
+            "metadata": resolved_metadata,
             "code": normalized_code,
             "codeFormat": "utf8",
         }
@@ -4712,6 +5334,7 @@ def create_server(
                     "dry_run_applied": False,
                     "confirm_write_required": True,
                     "mutation_applied": True,
+                    "warnings": metadata_warnings,
                 }
             )
             return enriched
@@ -5307,6 +5930,55 @@ def create_server(
                                 "Test new transform steps against an integration table before "
                                 "running them for real. payload.testTransformScope is required: "
                                 "one of allRecords, stop, firstRecord, lastRecord, specificRecords."
+                            ),
+                        },
+                        {
+                            "name": "list_topics",
+                            "aliases": ["listTopics"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "List MQTT topic names the server is tracking (JSON MQ API)."
+                            ),
+                        },
+                        {
+                            "name": "describe_topics",
+                            "aliases": ["describeTopics"],
+                            "group": "metadata",
+                            "risk_level": "low",
+                            "idempotent": True,
+                            "stability": "stable",
+                            "description": (
+                                "Describe MQTT topics, including their bound integration table "
+                                "and transform settings."
+                            ),
+                        },
+                        {
+                            "name": "configure_topic",
+                            "aliases": ["configureTopic"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Create or update (upsert) an MQTT topic binding to an "
+                                "integration table, with confirmation guardrails and dry-run "
+                                "preview. This is the delivery path for MQTT output; there is "
+                                "no mqtt createOutput service."
+                            ),
+                        },
+                        {
+                            "name": "delete_topic",
+                            "aliases": ["deleteTopic"],
+                            "group": "connector",
+                            "risk_level": "critical",
+                            "idempotent": False,
+                            "stability": "stable",
+                            "description": (
+                                "Delete an MQTT topic binding with confirmation guardrails "
+                                "and dry-run preview."
                             ),
                         },
                         {

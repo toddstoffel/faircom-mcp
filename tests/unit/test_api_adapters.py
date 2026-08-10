@@ -37,6 +37,14 @@ class StubClient:
         self.calls.append((f"hub:{action}", payload))
         return {"action": action, "payload": payload}
 
+    def mq_action(
+        self,
+        action: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self.calls.append((f"mq:{action}", payload))
+        return {"action": action, "payload": payload}
+
 
 def test_table_adapter_calls_expected_actions() -> None:
     client = StubClient()
@@ -112,6 +120,10 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
     create_table = adapter.create_integration_table({"tableName": "xform_1"})
     alter_table = adapter.alter_integration_table({"tableName": "xform_1"})
     delete_tables = adapter.delete_integration_tables({"tableNames": ["xform_1"]})
+    topics = adapter.list_topics({"partialName": "factory"})
+    topic_detail = adapter.describe_topics({"topics": ["factory/line-1/temperature"]})
+    configure = adapter.configure_topic({"topic": "factory/line-1/temperature"})
+    delete_topic_result = adapter.delete_topic({"topic": "factory/line-1/temperature"})
 
     assert inputs["action"] == "listInputs"
     assert input_detail["action"] == "describeInputs"
@@ -128,6 +140,10 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
     assert create_table["action"] == "createIntegrationTable"
     assert alter_table["action"] == "alterIntegrationTable"
     assert delete_tables["action"] == "deleteIntegrationTables"
+    assert topics["action"] == "listTopics"
+    assert topic_detail["action"] == "describeTopics"
+    assert configure["action"] == "configureTopic"
+    assert delete_topic_result["action"] == "deleteTopic"
     assert client.calls == [
         ("hub:listInputs", {"inputNameLike": "modbus%"}),
         ("hub:describeInputs", {"inputNames": ["modbus_1"]}),
@@ -136,14 +152,18 @@ def test_connector_adapter_calls_expected_hub_actions() -> None:
         ("hub:deleteInput", {"inputName": "modbus_1"}),
         ("hub:listOutputs", {"connectorNameLike": "mqtt%"}),
         ("hub:describeOutputs", {"connectorNames": ["mqtt_1"]}),
-        ("hub:createOutput", {"connectorName": "mqtt_1"}),
-        ("hub:alterOutput", {"connectorName": "mqtt_1"}),
+        ("hub:createOutput", {"outputName": "mqtt_1"}),
+        ("hub:alterOutput", {"outputName": "mqtt_1"}),
         ("hub:deleteOutput", {"connectorName": "mqtt_1"}),
         ("hub:listIntegrationTables", {"partialName": "xform"}),
         ("hub:describeIntegrationTables", {"tables": [{"tableName": "xform_1"}]}),
         ("hub:createIntegrationTable", {"tableName": "xform_1"}),
         ("hub:alterIntegrationTable", {"tableName": "xform_1"}),
         ("hub:deleteIntegrationTables", {"tableNames": ["xform_1"]}),
+        ("mq:listTopics", {"partialName": "factory"}),
+        ("mq:describeTopics", {"topics": ["factory/line-1/temperature"]}),
+        ("mq:configureTopic", {"topic": "factory/line-1/temperature"}),
+        ("mq:deleteTopic", {"topic": "factory/line-1/temperature"}),
     ]
 
 

@@ -166,6 +166,22 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
             connector_calls.append(("testIntegrationTableTransformSteps", payload))
             return {"action": "testIntegrationTableTransformSteps", "payload": payload}
 
+        def list_topics(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+            connector_calls.append(("listTopics", payload))
+            return {"action": "listTopics", "payload": payload}
+
+        def describe_topics(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+            connector_calls.append(("describeTopics", payload))
+            return {"action": "describeTopics", "payload": payload}
+
+        def configure_topic(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("configureTopic", payload))
+            return {"action": "configureTopic", "payload": payload}
+
+        def delete_topic(self, payload: dict[str, object]) -> dict[str, object]:
+            connector_calls.append(("deleteTopic", payload))
+            return {"action": "deleteTopic", "payload": payload}
+
         def create_code_package(self, payload: dict[str, object]) -> dict[str, object]:
             connector_calls.append(("createCodePackage", payload))
             return {"result": {}, "errorCode": 0, "errorMessage": ""}
@@ -248,6 +264,10 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "alter_integration_table",
         "delete_integration_tables",
         "test_integration_table_transform_steps",
+        "list_topics",
+        "describe_topics",
+        "configure_topic",
+        "delete_topic",
         "sql_query",
         "sql_query_page",
         "get_usage_contract",
@@ -372,15 +392,15 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "status": "success",
         "tool_name": "create_output",
         "action": "createOutput",
-        "payload": {"connectorName": "mqtt_1"},
-        "forwarded_payload": {"connectorName": "mqtt_1"},
+        "payload": {"outputName": "mqtt_1"},
+        "forwarded_payload": {"outputName": "mqtt_1"},
         "schema_outcome": "unvalidated",
         "execution_status": "not_executed",
         "preview": "Connector change preview only",
         "preview_details": {
             "action": "createOutput",
-            "target": {"connectorName": "mqtt_1"},
-            "forwarded_payload": {"connectorName": "mqtt_1"},
+            "target": {"outputName": "mqtt_1"},
+            "forwarded_payload": {"outputName": "mqtt_1"},
             "row_estimate": "unknown",
             "upstream_validated": False,
             "schema_validated": False,
@@ -496,6 +516,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
         "comment",
         "description",
         "metadata",
+        "input_fields",
+        "output_field_definitions",
         "confirm_write",
         "dry_run",
     ]
@@ -507,7 +529,9 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     ]["payload"]
     assert create_input_example["inputName"] == "modbus_energy_input"
     assert create_input_example["tableName"] == "modbus_energy_raw"
-    assert create_output_example["serviceName"] == "mqtt"
+    assert create_output_example["serviceName"] == "modbus"
+    assert create_output_example["outputName"] == "writeTemperatureToModbus"
+    assert "settings" in create_output_example
     assert usage_contract["example_validity"]["create_input"] == "complete"
     assert usage_contract["example_validity"]["manage_service"] == "complete"
     assert usage_contract["example_validity"]["create_output"] == "complete"
@@ -517,7 +541,8 @@ def test_create_server_registers_health_routes(monkeypatch: object) -> None:
     )
     assert usage_contract["example_validity"]["register_code_package"] == "complete"
     assert "modbus" in usage_contract["connector_payload_profiles"]
-    assert "mqtt" in usage_contract["connector_payload_profiles"]
+    assert "mqtt" not in usage_contract["connector_payload_profiles"]
+    assert "modbus" in usage_contract["connector_output_schema_profiles"]
     assert "javascript" not in usage_contract["connector_payload_profiles"]
     assert "required_keys" in usage_contract["connector_payload_profiles"]["modbus"]
     assert "enum_values" in usage_contract["connector_payload_profiles"]["modbus"]

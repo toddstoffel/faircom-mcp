@@ -394,8 +394,13 @@ Example preview:
   "name": "create_output",
   "arguments": {
     "payload": {
-      "connectorName": "mqtt_1",
-      "type": "output"
+      "outputName": "writeTemperatureToModbus",
+      "serviceName": "modbus",
+      "tableName": "modbusTableTCP",
+      "sourceFields": ["source_payload"],
+      "modbusProtocol": "TCP",
+      "modbusServer": "127.0.0.1",
+      "modbusServerPort": 502
     },
     "dry_run": true
   }
@@ -409,15 +414,56 @@ Example apply:
   "name": "create_output",
   "arguments": {
     "payload": {
-      "connectorName": "mqtt_1",
-      "type": "output"
+      "outputName": "writeTemperatureToModbus",
+      "serviceName": "modbus",
+      "tableName": "modbusTableTCP",
+      "sourceFields": ["source_payload"],
+      "modbusProtocol": "TCP",
+      "modbusServer": "127.0.0.1",
+      "modbusServerPort": 502
     },
     "confirm_write": true
   }
 }
 ```
 
+Flat `modbus*` properties are auto-nested under `settings` before the request reaches FairCom, matching the shape FairCom's wire format expects. `outputName` is the output identity field; `connectorName` is also accepted as an alias and renamed automatically.
+
+`mqtt` is **not** a valid `serviceName` for `create_input`/`create_output`. MQTT delivery is configured through MQ topic bindings instead — see [MQTT Delivery (MQ Topics)](#mqtt-delivery-mq-topics) below.
+
 The server does not auto-discover device register maps or connector-specific address models. Supply the connector payload details required by the FairCom Edge configuration API for the connector family you are managing.
+
+## MQTT Delivery (MQ Topics)
+
+MQTT delivery in FairCom Edge does not go through `create_output`. There is no `mqtt` integration service to enable and no mqtt output connector. Instead, an MQTT topic is bound directly to an integration table through the JSON MQ API's topic actions; records inserted into that table are then published to subscribers of the topic.
+
+Read-oriented tools:
+
+- `list_topics(payload?)` — list MQTT topic names the server is tracking.
+- `describe_topics(payload?)` — describe topics, including their bound table and transform settings.
+
+Write-oriented tools:
+
+- `configure_topic(payload, confirm_write=False, dry_run=False)` — create or update (upsert) a topic binding. Unlike `create_input`/`create_output`, this is an upsert, not a create-only action.
+- `delete_topic(payload, confirm_write=False, dry_run=False)`
+
+Example:
+
+```json
+{
+  "name": "configure_topic",
+  "arguments": {
+    "payload": {
+      "topic": "factory/line-1/mixing_tank/temperature",
+      "databaseName": "faircom",
+      "tableName": "modbus_mixing_tank_temp"
+    },
+    "confirm_write": true
+  }
+}
+```
+
+`configureTopic` also accepts `transformName` to transform messages before they are stored, plus `downgradeQoS` and `maxDeliveryRatePerSecond` (defaults come from `defaultDowngradeQoS`/`defaultMaxDeliveryRatePerSecond` in FairCom's `services.json`). After configuring, `configure_topic`'s response includes `mutation_applied`/`mutation_verification`, since the write is verified with a `describe_topics` read-back rather than trusted blindly.
 
 ## FairCom JSON API Surface
 
@@ -451,16 +497,20 @@ FAIRCOM_SQL_DENYLIST=DROP,TRUNCATE,ALTER
 | `sql_execute(statement, params?, confirm_write, dry_run)` | INSERT/UPDATE/DELETE (requires `confirm_write=true` unless `dry_run=true`) | Write |
 | `list_services(payload?)` | List Edge connector services and runtime state | Read-only |
 | `manage_service(payload, confirm_write, dry_run)` | Start/stop/restart a connector service | Write |
-| `describe_connector_schema(payload?)` | Local payload schema profiles and known-good examples per connector service | Read-only |
-| `validate_connector_payloads(payload)` | Preflight-validate connector payloads without mutating backend state | Read-only |
+| `describe_connector_schema(payload?)` | Local payload schema profiles and known-good examples per connector service and direction (input/output) | Read-only |
+| `validate_connector_payloads(payload)` | Preflight-validate connector payloads without mutating backend state, including cross-checking `serviceName` against `list_services` | Read-only |
 | `get_usage_contract()` | Canonical args, aliases, transport/session guidance, examples | Read-only |
 | `runtime_status()` | Health, version, diagnostics | Read-only |
 | `capabilities_summary()` | Discover enabled tool groups and policy preset | Read-only |
 | `observability_metrics()` | Snapshot of internal runtime metrics | Read-only |
 | `observability_audit()` | Snapshot of the write/audit event log | Read-only |
 | `observability_health()` | Readiness/liveness state as an MCP tool call | Read-only |
+| `list_topics(payload?)` | List MQTT topic names being tracked | Read-only |
+| `describe_topics(payload?)` | Describe MQTT topics, including bound table and transform settings | Read-only |
+| `configure_topic(payload, confirm_write, dry_run)` | Upsert an MQTT topic binding to an integration table | Write |
+| `delete_topic(payload, confirm_write, dry_run)` | Delete an MQTT topic binding | Write |
 
-See [Connector Management](#connector-management) for input/output connector tools, and [Integration Tables & Code Packages](#integration-tables--code-packages) for transform pipeline tools.
+See [Connector Management](#connector-management) for input/output connector tools, [Integration Tables & Code Packages](#integration-tables--code-packages) for transform pipeline tools, and [MQTT Delivery (MQ Topics)](#mqtt-delivery-mq-topics) for MQTT publish tools.
 
 ## Integration Tables & Code Packages
 
@@ -478,7 +528,7 @@ Write-oriented tools (same `dry_run` / `confirm_write` safety model as SQL and c
 - `create_integration_table(payload, confirm_write, dry_run)` — create a table, optionally with `fields` and `transformSteps` in the same call.
 - `alter_integration_table(payload, confirm_write, dry_run)` — alter a table's fields, transform steps, or retention policy. The server polls `describe_integration_tables` after the write and reports `mutation_applied` / `mutation_verification` in the response, because FairCom can return success while silently not applying some field or transform-step changes.
 - `delete_integration_tables(payload, confirm_write, dry_run)`
-- `register_code_package(payload, confirm_write, dry_run)` — create or update a code package (`createCodePackage`/`alterCodePackage`).
+- `register_code_package(payload, confirm_write, dry_run)` — create or update a code package (`createCodePackage`/`alterCodePackage`). Accepts `input_fields` (list of field names the transform reads) and `output_field_definitions` (list of `{name, type}` objects the transform writes); both are merged into `metadata.inputFields`/`metadata.outputFieldDefinitions`.
 - `clone_code_package(payload, confirm_write, dry_run)` — clone an existing code package under a new name.
 - `revert_code_package(payload, confirm_write, dry_run)` — revert a code package to a prior version. There is no delete; re-registering the same `code_name` is how you update it.
 - `test_integration_table_transform_steps(payload, confirm_write, dry_run)` — dry-run transform steps against a table. `payload.testTransformScope` is required and validated against the known enum (`allRecords`, `stop`, `firstRecord`, `lastRecord`, `specificRecords`) since FairCom's own error does not list valid values.
@@ -488,6 +538,7 @@ Important, field-tested gotchas:
 - Declare every target field in `create_integration_table`'s `fields` array up front. Neither the transform nor `alter_integration_table` can reliably add fields to an existing table afterward.
 - Put `databaseName` and `ownerName` inside each transform step object, not only at the table's top level, or FairCom rejects the step with a missing-default-database error.
 - A `transformStepMethod` of `"javascript"` requires `transformStepService: "v8TransformService"` alongside it.
+- Set `input_fields`/`output_field_definitions` on `register_code_package` for `integrationTableTransform` packages. Without `metadata.inputFields`/`metadata.outputFieldDefinitions`, the code package is created successfully but the FairCom Edge Explorer wizard reports "no suitable Integration Table Transform Code Packages" and cannot find it — the Code Editor GUI sets these automatically, but the Code Package API does not. `register_code_package` returns a `warnings` entry naming the missing property when this happens.
 
 ## Common AI Client Mistakes (And Fixes)
 

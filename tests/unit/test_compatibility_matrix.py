@@ -1227,3 +1227,342 @@ def test_compatibility_matrix_register_code_package_alters_existing_package(
     _action, alter_payload = connector_adapter.calls[-1]
     assert alter_payload["codeName"] == "decode_mixing_tank"
     assert alter_payload["codeType"] == "integrationTableTransform"
+
+
+class _ServiceRegistryClient:
+    def __init__(self, services: list[dict[str, object]]) -> None:
+        self._services = services
+
+    def admin_action(
+        self,
+        action: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        _ = payload
+        if action != "listServices":
+            return {"action": action}
+        return {"services": self._services}
+
+
+def test_compatibility_matrix_create_input_rejects_unregistered_service(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=_CaptureConnectors(),
+    ):
+        server = server_module.create_server(
+            _config(),
+            client_factory=lambda _config: _ServiceRegistryClient(
+                [{"serviceName": "modbus", "active": True}]
+            ),
+        )
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["create_input"](
+            payload={
+                "connectorName": "opcua_input",
+                "serviceName": "opcua",
+                "tableName": "opcua_raw",
+            },
+            confirm_write=True,
+        )
+
+    validation_errors = exc.value.details["received_args"]["validation_errors"]
+    unregistered_issue = next(
+        issue for issue in validation_errors if issue["reason"] == "unregistered_service"
+    )
+    assert unregistered_issue["registered_services"] == ["modbus"]
+
+
+def test_compatibility_matrix_validate_connector_payloads_warns_disabled_service(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=_CaptureConnectors(),
+    ):
+        server = server_module.create_server(
+            _config(),
+            client_factory=lambda _config: _ServiceRegistryClient(
+                [{"serviceName": "modbus", "active": False}]
+            ),
+        )
+
+    result = server.tools["validate_connector_payloads"](
+        action="createInput",
+        payload={
+            "connectorName": "modbus_input",
+            "serviceName": "modbus",
+            "tableName": "modbus_raw",
+            "modbusProtocol": "TCP",
+            "modbusServer": "127.0.0.1",
+            "modbusServerPort": 502,
+            "propertyMapList": [
+                {
+                    "propertyName": "temperature",
+                    "modbusDataAccess": "holdingregister",
+                    "modbusDataAddress": 1199,
+                }
+            ],
+        },
+    )
+
+    assert result["results"][0]["status"] == "valid"
+    assert any("disabled" in warning for warning in result["results"][0]["warnings"])
+
+
+def test_compatibility_matrix_describe_connector_schema_removes_mqtt(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["describe_connector_schema"](service_name="mqtt")
+
+    assert exc.value.details["received_args"]["service_name"] == "mqtt"
+    assert "mqtt" not in exc.value.details["expected_args"]["service_name"]
+
+
+def test_compatibility_matrix_describe_connector_schema_output_direction(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    schema_profile = server.tools["describe_connector_schema"](
+        service_name="modbus",
+        direction="output",
+    )
+
+    assert schema_profile["direction"] == "output"
+    assert "outputName" in schema_profile["schema"]["required"]
+    assert "sourceFields" in schema_profile["schema"]["required"]
+
+
+def test_compatibility_matrix_create_output_preflight_nests_settings(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    preview = server.tools["create_output"](
+        payload={
+            "outputName": "writeTemperatureToModbus",
+            "serviceName": "modbus",
+            "tableName": "modbusTableTCP",
+            "sourceFields": ["source_payload"],
+            "modbusProtocol": "TCP",
+            "modbusServer": "127.0.0.1",
+            "modbusServerPort": 502,
+        },
+        dry_run=True,
+    )
+
+    forwarded = preview["forwarded_payload"]
+    assert "settings" in forwarded
+    assert forwarded["settings"]["modbusProtocol"] == "TCP"
+    assert "modbusProtocol" not in forwarded
+
+
+def test_compatibility_matrix_validate_connector_payloads_flags_missing_output_fields(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    result = server.tools["validate_connector_payloads"](
+        action="createOutput",
+        payload={"outputName": "writeTemperatureToModbus", "serviceName": "modbus"},
+    )
+
+    assert result["results"][0]["status"] == "invalid"
+    error_paths = {issue["path"] for issue in result["results"][0]["errors"]}
+    assert "payload.tableName" in error_paths
+    assert "payload.sourceFields" in error_paths
+
+
+class _TopicConnector:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object] | None]] = []
+        self._configured: dict[str, object] | None = None
+
+    def configure_topic(self, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(("configureTopic", payload))
+        self._configured = dict(payload)
+        return {"errorCode": 0, "errorMessage": "", "result": {"ok": True}}
+
+    def describe_topics(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+        self.calls.append(("describeTopics", payload))
+        if self._configured is None:
+            return {"topics": []}
+        return {"topics": [dict(self._configured)]}
+
+    def delete_topic(self, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(("deleteTopic", payload))
+        return {"errorCode": 0, "errorMessage": ""}
+
+    def list_topics(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+        self.calls.append(("listTopics", payload))
+        return {"topics": ["factory/line-1/mixing_tank/temperature"]}
+
+
+def test_compatibility_matrix_configure_topic_requires_confirm_write(
+    monkeypatch: object,
+) -> None:
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ValidationFailure) as exc:
+        server.tools["configure_topic"](
+            payload={
+                "topic": "factory/line-1/mixing_tank/temperature",
+                "databaseName": "faircom",
+                "tableName": "modbus_mixing_tank_temp",
+            },
+        )
+
+    assert exc.value.details["reason_code"] == "missing_write_confirmation"
+
+
+def test_compatibility_matrix_configure_topic_dry_run_preview(monkeypatch: object) -> None:
+    server = _make_server(monkeypatch)
+
+    preview = server.tools["configure_topic"](
+        payload={
+            "topic": "factory/line-1/mixing_tank/temperature",
+            "databaseName": "faircom",
+            "tableName": "modbus_mixing_tank_temp",
+        },
+        dry_run=True,
+    )
+
+    assert preview["execution_status"] == "not_executed"
+    assert "upsert" in preview["preview"].lower()
+
+
+def test_compatibility_matrix_configure_topic_verifies_mutation(monkeypatch: object) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+    connector_adapter = _TopicConnector()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["configure_topic"](
+        payload={
+            "topic": "factory/line-1/mixing_tank/temperature",
+            "databaseName": "faircom",
+            "tableName": "modbus_mixing_tank_temp",
+        },
+        confirm_write=True,
+    )
+
+    assert result["mutation_applied"] is True
+    assert result["mutation_verification"]["status"] == "verified"
+    action_names = [action for action, _payload in connector_adapter.calls]
+    assert action_names == ["configureTopic", "describeTopics"]
+
+
+def test_compatibility_matrix_list_and_describe_topics(monkeypatch: object) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+    connector_adapter = _TopicConnector()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    topics = server.tools["list_topics"]()
+    assert topics["topics"] == ["factory/line-1/mixing_tank/temperature"]
+
+    described = server.tools["describe_topics"](
+        payload={"topics": ["factory/line-1/mixing_tank/temperature"]}
+    )
+    assert described == {"topics": []}
+
+
+def test_compatibility_matrix_register_code_package_warns_missing_wizard_metadata(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    class _CaptureCodePackageConnector:
+        def describe_code_packages(self, payload: dict[str, object]) -> dict[str, object]:
+            _ = payload
+            return {"result": {"data": []}}
+
+        def create_code_package(self, payload: dict[str, object]) -> dict[str, object]:
+            _ = payload
+            return {"result": {}, "errorCode": 0, "errorMessage": ""}
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=_CaptureCodePackageConnector(),
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["register_code_package"](
+        code_name="decode_mixing_tank",
+        code="record.value = record.source_payload.value;",
+        confirm_write=True,
+    )
+
+    assert any("inputFields" in warning for warning in result["warnings"])
+    assert any("outputFieldDefinitions" in warning for warning in result["warnings"])
+
+
+def test_compatibility_matrix_register_code_package_sets_wizard_metadata(
+    monkeypatch: object,
+) -> None:
+    _fake_class, server_module = load_server_module(monkeypatch)
+
+    class _CaptureCodePackageConnector:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def describe_code_packages(self, payload: dict[str, object]) -> dict[str, object]:
+            _ = payload
+            return {"result": {"data": []}}
+
+        def create_code_package(self, payload: dict[str, object]) -> dict[str, object]:
+            self.calls.append(("createCodePackage", payload))
+            return {"result": {}, "errorCode": 0, "errorMessage": ""}
+
+    connector_adapter = _CaptureCodePackageConnector()
+
+    with patched_adapters(
+        server_module,
+        table_adapter=BasicFakeTables(),
+        sql_adapter=BasicFakeSQL(),
+        connector_adapter=connector_adapter,
+    ):
+        server = server_module.create_server(_config(), client_factory=lambda _config: object())
+
+    result = server.tools["register_code_package"](
+        code_name="decode_mixing_tank",
+        code="record.temperature_c = record.source_payload.value;",
+        input_fields=["source_payload.value"],
+        output_field_definitions=[{"name": "temperature_c", "type": "double"}],
+        confirm_write=True,
+    )
+
+    assert result["warnings"] == []
+    _action, payload = connector_adapter.calls[-1]
+    assert payload["metadata"]["inputFields"] == ["source_payload.value"]
+    assert payload["metadata"]["outputFieldDefinitions"] == [
+        {"name": "temperature_c", "type": "double"}
+    ]
