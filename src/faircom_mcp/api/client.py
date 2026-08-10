@@ -52,7 +52,7 @@ class FaircomAPIClient:
         cls,
         config: AppConfig,
         *,
-        timeout_seconds: float = 10.0,
+        timeout_seconds: float | None = None,
         max_read_retries: int = 2,
         transport: httpx.BaseTransport | None = None,
     ) -> FaircomAPIClient:
@@ -60,7 +60,9 @@ class FaircomAPIClient:
             base_url=config.faircom_api_base_url,
             auth=config.auth,
             tls_verify=config.tls_verify,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=(
+                timeout_seconds if timeout_seconds is not None else config.api_timeout_seconds
+            ),
             max_read_retries=max_read_retries,
             transport=transport,
         )

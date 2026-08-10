@@ -104,6 +104,7 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     tls_verify: bool = True
+    api_timeout_seconds: float = 30.0
 
 
 def _require_base_url(raw_value: str | None) -> str:
@@ -160,6 +161,27 @@ def _parse_port(raw_port: str | None) -> int:
     return port
 
 
+def _parse_timeout_seconds(raw_value: str | None) -> float:
+    if not raw_value:
+        return 30.0
+
+    try:
+        timeout_seconds = float(raw_value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            "FAIRCOM_API_TIMEOUT_SECONDS must be a number",
+            details={"value": raw_value},
+        ) from exc
+
+    if timeout_seconds <= 0:
+        raise ConfigurationError(
+            "FAIRCOM_API_TIMEOUT_SECONDS must be greater than 0",
+            details={"value": timeout_seconds},
+        )
+
+    return timeout_seconds
+
+
 def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
     env_values = env or environ
 
@@ -205,4 +227,5 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         security=security,
         observability=observability,
         tls_verify=tls_verify,
+        api_timeout_seconds=_parse_timeout_seconds(env_values.get("FAIRCOM_API_TIMEOUT_SECONDS")),
     )
