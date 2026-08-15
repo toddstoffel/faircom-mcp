@@ -1,9 +1,18 @@
 # FairCom MCP Server
 
+> [!CAUTION]
+> **Independent proof of concept:** This project was created independently by Todd Stoffel for experimentation with FairCom products. It is not an official FairCom project and is not affiliated with, sponsored by, endorsed by, or supported by FairCom.
+
 > [!IMPORTANT]
 > Developers and maintainers: use [BUILD.md](BUILD.md) for build, packaging, and release instructions. This README is product and usage focused.
 
-Connect AI assistants and LLMs to FairCom databases with explicit write controls, Linux packaging, and operational tooling.
+Connect AI assistants and LLMs to data backends with explicit write controls, Linux packaging, and operational tooling. The proof-of-concept adapter included here targets FairCom databases and their JSON APIs.
+
+## Proof-of-Concept Scope
+
+The MCP transport, session handling, policy controls, write-confirmation workflow, rate limiting, and observability are not inherently dependent on FairCom software. FairCom is the reference backend used to demonstrate those capabilities in this repository.
+
+Adapting the project to another database or service primarily means replacing the backend adapter and its tool-specific mappings while retaining the MCP server and operational layers. The implementation as currently distributed includes a FairCom adapter, so its FairCom-specific tools require access to the corresponding FairCom APIs.
 
 > Current release: v${PROJECT_VERSION}. The install examples and release automation in this repository are aligned to this version.
 
@@ -185,7 +194,7 @@ curl -i -X POST http://127.0.0.1:8000/mcp \
 
 ## Docker Hub Usage
 
-The official image repository is:
+The image repository maintained for this proof of concept is:
 
 - `faircomteam/faircom-mcp`
 
@@ -627,7 +636,7 @@ Tip:
 
 If your parser is brittle against SSE envelopes, run the server in HTTP mode and keep request/response handling strictly JSON.
 
-## Official JSON-RPC Helper Clients
+## Project-Provided JSON-RPC Helper Clients
 
 Reference helper clients are available for strict JSON-RPC integrations:
 
@@ -699,9 +708,10 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for terms
 
 ## Support
 
-For FairCom-specific questions: https://www.faircom.com/support
-For MCP integration issues: Open a GitHub issue
+This independent proof of concept is not supported by FairCom. For issues with this project or its MCP integration, open a [GitHub issue](https://github.com/toddstoffel/faircom-mcp/issues).
+
+For questions about FairCom products themselves, see https://www.faircom.com/support.
 
 ---
 
-**Built for the FairCom community.** Query with confidence. Automate with safety.
+**An independent proof of concept built for experimentation with FairCom products and adaptable to other backends.**
