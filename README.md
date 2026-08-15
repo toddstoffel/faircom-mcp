@@ -1,4 +1,4 @@
-# FairCom MCP Server - Independent Proof of Concept
+# MCP Server (FairCom Proof of Concept)
 
 > [!CAUTION]
 > **Independent proof of concept:** This project was created independently by Todd Stoffel for experimentation with FairCom products. It is not an official FairCom project and is not affiliated with, sponsored by, endorsed by, or supported by FairCom.
